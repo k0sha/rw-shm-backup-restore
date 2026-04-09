@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="3.3.0"
+VERSION="3.3.1"
 INSTALL_DIR="/opt/rw-backup-restore"
 BACKUP_DIR="$INSTALL_DIR/backup"
 CONFIG_FILE="$INSTALL_DIR/config.env"
@@ -194,36 +194,28 @@ create_shm_backup() {
 
     print_message "INFO" "$(t shm_creating)..."
 
-    local shm_mysql_container
-    shm_mysql_container=$(docker ps --format '{{.Names}}' | grep -iE 'shm.*(db|mysql|mariadb)|(db|mysql|mariadb).*shm' | head -n 1)
-
-    if [[ -z "$shm_mysql_container" ]]; then
-        print_message "ERROR" "$(t shm_db_not_found)"
+    if [[ ! -d "$SHM_ROOT_DIR" ]]; then
+        print_message "ERROR" "$(t bk_dir_missing) ${BOLD}${SHM_ROOT_DIR}${RESET}"
         return 1
     fi
 
     print_message "INFO" "$(t shm_dumping)..."
-    if ! docker exec "$shm_mysql_container" mysqldump --all-databases -u root 2>/dev/null | gzip -9 > "$BACKUP_DIR/$SHM_DUMP_FILE"; then
+    if ! (cd "$SHM_ROOT_DIR" && docker compose exec -T mysql /bin/bash -c 'MYSQL_PWD=${MYSQL_ROOT_PASSWORD} mysqldump -u root shm') | gzip -9 > "$BACKUP_DIR/$SHM_DUMP_FILE"; then
         print_message "ERROR" "$(t shm_dump_err)"
         return 1
     fi
     print_message "SUCCESS" "$(t shm_dump_ok)"
 
-    if [[ -d "$SHM_ROOT_DIR" ]]; then
-        print_message "INFO" "$(t shm_archiving) ${BOLD}${SHM_ROOT_DIR}${RESET}..."
-        local exclude_args=""
-        for pattern in $BACKUP_EXCLUDE_PATTERNS; do
-            exclude_args+="--exclude=$pattern "
-        done
+    print_message "INFO" "$(t shm_archiving) ${BOLD}${SHM_ROOT_DIR}${RESET}..."
+    local exclude_args=""
+    for pattern in $BACKUP_EXCLUDE_PATTERNS; do
+        exclude_args+="--exclude=$pattern "
+    done
 
-        if eval "tar -czf '$BACKUP_DIR/$SHM_DIR_ARCHIVE' $exclude_args -C '$(dirname "$SHM_ROOT_DIR")' '$(basename "$SHM_ROOT_DIR")'"; then
-            print_message "SUCCESS" "$(t shm_arch_ok)"
-        else
-            print_message "ERROR" "$(t shm_arch_err)"
-            return 1
-        fi
+    if eval "tar -czf '$BACKUP_DIR/$SHM_DIR_ARCHIVE' $exclude_args -C '$(dirname "$SHM_ROOT_DIR")' '$(basename "$SHM_ROOT_DIR")'"; then
+        print_message "SUCCESS" "$(t shm_arch_ok)"
     else
-        print_message "ERROR" "$(t bk_dir_missing) ${BOLD}${SHM_ROOT_DIR}${RESET}"
+        print_message "ERROR" "$(t shm_arch_err)"
         return 1
     fi
 
@@ -2530,18 +2522,10 @@ restore_shm_backup() {
         fi
         cd /
 
-        local shm_mysql_container
-        shm_mysql_container=$(docker ps --format '{{.Names}}' | grep -iE 'shm.*(db|mysql|mariadb)|(db|mysql|mariadb).*shm' | head -n 1)
-
-        if [[ -z "$shm_mysql_container" ]]; then
-            print_message "ERROR" "$(t rs_shm_db_not_found)"
-            return 1
-        fi
-
         print_message "INFO" "$(t rs_shm_restoring_db)"
         local dump_uncompressed="${SHM_DUMP_FILE%.gz}"
 
-        if gunzip -f "$SHM_DUMP_FILE" 2>/dev/null && docker exec -i "$shm_mysql_container" mysql -u root < "$dump_uncompressed" 2>/dev/null; then
+        if gunzip -f "$SHM_DUMP_FILE" 2>/dev/null && (cd "$shm_restore_path" && docker compose exec -T mysql /bin/bash -c 'MYSQL_PWD=${MYSQL_ROOT_PASSWORD} mysql -u root shm') < "$dump_uncompressed" 2>/dev/null; then
             print_message "SUCCESS" "$(t rs_shm_db_ok)"
         else
             print_message "ERROR" "$(t rs_shm_dump_err)"

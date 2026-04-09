@@ -18,7 +18,7 @@
 
 ```
 RW & SHM BACKUP & RESTORE
-v3.3.0
+v3.3.1
 [Remnawave ✓] [SHM ✓]
 
    1. Создать бэкап
