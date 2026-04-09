@@ -8,32 +8,18 @@ jobs:
   notify-telegram:
     runs-on: ubuntu-latest
     steps:
-      - name: Send to My Chat
+      - name: Send to Chat
         uses: appleboy/telegram-action@v0.1.0
         with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID_1 }}
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message_thread_id: ${{ secrets.MESSAGE_THREAD_ID }}
           message: |
             📦 *Project:* [${{ github.event.repository.name }}](https://github.com/${{ github.repository }})
-            🚀 *Release:* ${{ github.event.release.tag_name }}  
-            
-            📝 *Changelog:*
-            ${{ github.event.release.body }}  
-            
-            👤 *Released by*: [${{ github.event.release.author.login }}](https://github.com/distillium)
-          format: markdown
+            🚀 *Release:* ${{ github.event.release.tag_name }}
 
-      - name: Send to eGames Chat
-        uses: appleboy/telegram-action@v0.1.0
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID_2 }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            📦 *Project:* [${{ github.event.repository.name }}](https://github.com/${{ github.repository }})
-            🚀 *Release:* ${{ github.event.release.tag_name }}  
-            
             📝 *Changelog:*
-            ${{ github.event.release.body }}  
-            
-            👤 *Released by*: [${{ github.event.release.author.login }}](https://github.com/distillium)
+            ${{ github.event.release.body }}
+
+            👤 *Released by*: [${{ github.event.release.author.login }}](https://github.com/k0sha)
           format: markdown

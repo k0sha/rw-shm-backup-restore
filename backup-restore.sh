@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="3.2.0"
+VERSION="3.3.0"
 INSTALL_DIR="/opt/rw-backup-restore"
 BACKUP_DIR="$INSTALL_DIR/backup"
 CONFIG_FILE="$INSTALL_DIR/config.env"
@@ -12,7 +12,7 @@ RETAIN_BACKUPS_DAYS=7
 S3_RETAIN_DAYS=30
 SYMLINK_PATH="/usr/local/bin/rw-backup"
 REMNALABS_ROOT_DIR=""
-SCRIPT_REPO_URL="https://raw.githubusercontent.com/distillium/remnawave-backup-restore/main/backup-restore.sh"
+SCRIPT_REPO_URL="https://raw.githubusercontent.com/k0sha/rw-shm-backup-restore/main/backup-restore.sh"
 SCRIPT_RUN_PATH="$(realpath "$0")"
 GD_CLIENT_ID=""
 GD_CLIENT_SECRET=""
@@ -41,10 +41,9 @@ BACKUP_EXCLUDE_PATTERNS="*.log *.tmp .git"
 LANG_CODE=""
 TRANSLATIONS_DIR="$INSTALL_DIR/translations"
 
-BOT_BACKUP_ENABLED="false"
-BOT_BACKUP_PATH=""
-BOT_BACKUP_SELECTED=""
-BOT_BACKUP_DB_USER="postgres"
+REMNAWAVE_ENABLED="false"
+SHM_ENABLED="false"
+SHM_ROOT_DIR=""
 
 
 if [[ -t 0 ]]; then
@@ -160,178 +159,78 @@ setup_symlink() {
     return 0
 }
 
-configure_bot_backup() {
-    while true; do
-        clear
-        echo -e "${GREEN}${BOLD}$(t bot_cfg_title)${RESET}"
-        echo ""
-        
-        if [[ "$BOT_BACKUP_ENABLED" == "true" ]]; then
-            echo -e "  $(t bot_label)      ${BOLD}${GREEN}${BOT_BACKUP_SELECTED}${RESET}"
-            echo -e "  $(t bot_path_label)     ${BOLD}${BOT_BACKUP_PATH}${RESET}"
-            
-            if [[ "$SKIP_PANEL_BACKUP" == "true" ]]; then
-                echo -e "  $(t bot_mode_label)    ${BOLD}${RED}$(t bot_mode_only)${RESET}"
-            else
-                echo -e "  $(t bot_mode_label)    ${BOLD}${GREEN}$(t bot_mode_panel_bot)${RESET}"
-            fi
+compare_versions() {
+    local v1="$1"
+    local v2="$2"
+
+    local v1_num="${v1//[^0-9.]/}"
+    local v2_num="${v2//[^0-9.]/}"
+
+    local v1_sfx="${v1//$v1_num/}"
+    local v2_sfx="${v2//$v2_num/}"
+
+    if [[ "$v1_num" == "$v2_num" ]]; then
+        if [[ -z "$v1_sfx" && -n "$v2_sfx" ]]; then
+            return 0
+        elif [[ -n "$v1_sfx" && -z "$v2_sfx" ]]; then
+            return 1
+        elif [[ "$v1_sfx" < "$v2_sfx" ]]; then
+            return 0
         else
-            print_message "INFO" "$(t bot_backup_status) ${RED}${BOLD}$(t bot_disabled)${RESET}"
-            if [[ "$SKIP_PANEL_BACKUP" == "true" ]]; then
-                print_message "WARN" "$(t bot_warn_nothing)"
-            else
-                print_message "INFO" "$(t bot_panel_only_mode)"
-            fi
+            return 1
         fi
-        echo ""
-        
-        echo " 1. $(t bot_menu_configure)"
-        
-        if [[ "$BOT_BACKUP_ENABLED" == "true" ]]; then
-            echo " 2. $(t bot_menu_disable)"
-            
-            if [[ "$SKIP_PANEL_BACKUP" == "true" ]]; then
-                if [[ "$REMNALABS_ROOT_DIR" != "none" && -n "$REMNALABS_ROOT_DIR" ]]; then
-                    echo " 3. $(t bot_menu_enable_panel)"
-                fi
-            else
-                echo " 3. $(t bot_menu_exclude_panel)"
-            fi
+    else
+        if printf '%s\n' "$v1_num" "$v2_num" | sort -V | head -n1 | grep -qx "$v1_num"; then
+            return 0
+        else
+            return 1
         fi
-
-        echo ""
-        echo " 0. $(t back_to_menu)"
-        echo ""
-        
-        read -rp " ${GREEN}[?]${RESET} $(t select_option)" choice
-        
-        case $choice in
-            1)
-                clear
-                echo -e "${GREEN}${BOLD}$(t bot_select_title)${RESET}"
-                echo ""
-                echo " 1. $(t bot_jesus)"
-                echo " 2. $(t bot_jesus_priv)"
-                echo " 3. $(t bot_machka)"
-                echo " 4. $(t bot_snoups)"
-                echo " 0. $(t back)"
-                echo ""
-                
-                local bot_choice
-                read -rp " ${GREEN}[?]${RESET} $(t your_choice)" bot_choice
-                case "$bot_choice" in
-                    1) BOT_BACKUP_SELECTED="Бот от Иисуса"; bot_folder="remnawave-telegram-shop" ;;
-                    2) BOT_BACKUP_SELECTED="Приватный бот от Иисуса"; bot_folder="rwp-shop" ;;
-                    3) BOT_BACKUP_SELECTED="Бот от Мачки"; bot_folder="remnawave-tg-shop" ;;
-                    4) BOT_BACKUP_SELECTED="Бот от Snoups"; bot_folder="remnashop" ;;
-                    0) continue ;;
-                    *) print_message "ERROR" "$(t invalid_input)"; sleep 1; continue ;;
-                esac
-                
-                echo ""
-                print_message "ACTION" "$(t bot_select_path)"
-                echo " 1. /opt/$bot_folder"
-                echo " 2. /root/$bot_folder"
-                echo " 3. /opt/stacks/$bot_folder"
-                echo " 4. $(t custom_path)"
-                echo ""
-                
-                local path_choice
-                read -rp " ${GREEN}[?]${RESET} $(t select_option)" path_choice
-                case "$path_choice" in
-                    1) BOT_BACKUP_PATH="/opt/$bot_folder" ;;
-                    2) BOT_BACKUP_PATH="/root/$bot_folder" ;;
-                    3) BOT_BACKUP_PATH="/opt/stacks/$bot_folder" ;;
-                    4) 
-                        echo ""
-                        read -rp " $(t bot_enter_path)" custom_bot_path
-                        if [[ -z "$custom_bot_path" || ! "$custom_bot_path" = /* ]]; then
-                            print_message "ERROR" "$(t bot_path_absolute)"
-                            sleep 2; continue
-                        fi
-                        BOT_BACKUP_PATH="${custom_bot_path%/}" 
-                        ;;
-                    *) print_message "ERROR" "$(t invalid_input)"; sleep 1; continue ;;
-                esac
-
-                echo ""
-                read -rp " $(echo -e "${GREEN}[?]${RESET} $(t bot_db_user)")" bot_db_user
-                BOT_BACKUP_DB_USER="${bot_db_user:-postgres}"
-
-                if [[ "$SKIP_PANEL_BACKUP" == "false" ]]; then
-                    echo ""
-                    print_message "ACTION" "$(t bot_disable_panel)"
-                    read -rp " $(echo -e "${GREEN}[?]${RESET} (${GREEN}y${RESET}/${RED}n${RESET}): ")" only_bot_confirm
-                    if [[ "$only_bot_confirm" =~ ^[yY]$ ]]; then
-                        SKIP_PANEL_BACKUP="true"
-                    fi
-                fi
-
-                BOT_BACKUP_ENABLED="true"
-                save_config
-                print_message "SUCCESS" "$(t bot_saved)"
-                read -rp "$(t press_enter)"
-                ;;
-
-            2)
-                BOT_BACKUP_ENABLED="false"
-                BOT_BACKUP_PATH=""
-                BOT_BACKUP_SELECTED=""
-                
-                echo ""
-                print_message "SUCCESS" "$(t bot_turned_off)"
-
-                if [[ "$SKIP_PANEL_BACKUP" == "true" && "$REMNALABS_ROOT_DIR" != "none" && -n "$REMNALABS_ROOT_DIR" ]]; then
-                    print_message "WARN" "$(t bot_panel_also_off)"
-                    read -rp " $(echo -e "${GREEN}[?]${RESET} $(t bot_enable_panel_back) (y/n): ")" restore_p
-                    if [[ "$restore_p" =~ ^[yY]$ ]]; then
-                        SKIP_PANEL_BACKUP="false"
-                        print_message "SUCCESS" "$(t bot_panel_restored)"
-                    fi
-                fi
-                
-                save_config
-                read -rp "$(t press_enter)"
-                ;;
-
-            3)
-                if [[ "$SKIP_PANEL_BACKUP" == "true" ]]; then
-                    SKIP_PANEL_BACKUP="false"
-                    print_message "SUCCESS" "$(t bot_mode_to_panel_bot)"
-                else
-                    SKIP_PANEL_BACKUP="true"
-                    print_message "SUCCESS" "$(t bot_mode_to_only_bot)"
-                fi
-                save_config
-                read -rp "$(t press_enter)"
-                ;;
-
-            0) break ;;
-            *) print_message "ERROR" "$(t invalid_input)" ; sleep 1 ;;
-        esac
-    done
+    fi
 }
 
-get_bot_params() {
-    local bot_name="$1"
-    
-    case "$bot_name" in
-        "Бот от Иисуса")
-            echo "remnawave-telegram-shop-db|remnawave-telegram-shop-db-data|remnawave-telegram-shop|db"
-            ;;
-        "Приватный бот от Иисуса")
-            echo "rwp_shop_db|rwp_shop_db_data|rwp-shop|db"
-            ;;
-        "Бот от Мачки")
-            echo "remnawave-tg-shop-db|remnawave-tg-shop-db-data|remnawave-tg-shop|remnawave-tg-shop-db"
-            ;;
-        "Бот от Snoups")
-            echo "remnashop-db|remnashop-db-data|remnashop|remnashop-db"
-            ;;
-        *)
-            echo "|||"
-            ;;
-    esac
+create_shm_backup() {
+    local SHM_DUMP_FILE="shm_dump_${TIMESTAMP}.sql.gz"
+    local SHM_DIR_ARCHIVE="shm_dir_${TIMESTAMP}.tar.gz"
+
+    print_message "INFO" "$(t shm_creating)..."
+
+    local shm_mysql_container
+    shm_mysql_container=$(docker ps --format '{{.Names}}' | grep -iE 'shm.*(db|mysql|mariadb)|(db|mysql|mariadb).*shm' | head -n 1)
+
+    if [[ -z "$shm_mysql_container" ]]; then
+        print_message "ERROR" "$(t shm_db_not_found)"
+        return 1
+    fi
+
+    print_message "INFO" "$(t shm_dumping)..."
+    if ! docker exec "$shm_mysql_container" mysqldump --all-databases -u root 2>/dev/null | gzip -9 > "$BACKUP_DIR/$SHM_DUMP_FILE"; then
+        print_message "ERROR" "$(t shm_dump_err)"
+        return 1
+    fi
+    print_message "SUCCESS" "$(t shm_dump_ok)"
+
+    if [[ -d "$SHM_ROOT_DIR" ]]; then
+        print_message "INFO" "$(t shm_archiving) ${BOLD}${SHM_ROOT_DIR}${RESET}..."
+        local exclude_args=""
+        for pattern in $BACKUP_EXCLUDE_PATTERNS; do
+            exclude_args+="--exclude=$pattern "
+        done
+
+        if eval "tar -czf '$BACKUP_DIR/$SHM_DIR_ARCHIVE' $exclude_args -C '$(dirname "$SHM_ROOT_DIR")' '$(basename "$SHM_ROOT_DIR")'"; then
+            print_message "SUCCESS" "$(t shm_arch_ok)"
+        else
+            print_message "ERROR" "$(t shm_arch_err)"
+            return 1
+        fi
+    else
+        print_message "ERROR" "$(t bk_dir_missing) ${BOLD}${SHM_ROOT_DIR}${RESET}"
+        return 1
+    fi
+
+    BACKUP_ITEMS+=("$SHM_DUMP_FILE" "$SHM_DIR_ARCHIVE")
+    print_message "SUCCESS" "$(t shm_done)"
+    echo ""
+    return 0
 }
 
 check_docker_installed() {
@@ -355,340 +254,6 @@ check_docker_installed() {
     return 0
 }
 
-create_bot_backup() {
-    if [[ "$BOT_BACKUP_ENABLED" != "true" ]]; then
-        return 0
-    fi
-    
-    print_message "INFO" "$(t cbot_creating) ${BOLD}${BOT_BACKUP_SELECTED}${RESET}..."
-    
-    local bot_params=$(get_bot_params "$BOT_BACKUP_SELECTED")
-    IFS='|' read -r BOT_CONTAINER_NAME BOT_VOLUME_NAME BOT_DIR_NAME BOT_SERVICE_NAME <<< "$bot_params"
-    
-    if [[ -z "$BOT_CONTAINER_NAME" ]]; then
-        print_message "ERROR" "$(t cbot_unknown) $BOT_BACKUP_SELECTED"
-        print_message "INFO" "$(t cbot_skip)"
-        return 0
-    fi
-
-    local BOT_BACKUP_FILE_DB="bot_dump_${TIMESTAMP}.sql.gz"
-    local BOT_DIR_ARCHIVE="bot_dir_${TIMESTAMP}.tar.gz"
-    
-    if ! docker inspect "$BOT_CONTAINER_NAME" > /dev/null 2>&1 || ! docker container inspect -f '{{.State.Running}}' "$BOT_CONTAINER_NAME" 2>/dev/null | grep -q "true"; then
-        print_message "WARN" "$(t cbot_not_running)"
-        return 0
-    fi
-    
-    print_message "INFO" "$(t cbot_dumping)"
-    if ! docker exec "$BOT_CONTAINER_NAME" pg_dumpall -c -U "$BOT_BACKUP_DB_USER" | gzip -9 > "$BACKUP_DIR/$BOT_BACKUP_FILE_DB"; then
-        print_message "ERROR" "$(t cbot_dump_err)"
-        return 0
-    fi
-    
-    if [ -d "$BOT_BACKUP_PATH" ]; then
-        print_message "INFO" "$(t cbot_archiving) ${BOLD}${BOT_BACKUP_PATH}${RESET}..."
-        local exclude_args=""
-        for pattern in $BACKUP_EXCLUDE_PATTERNS; do
-            exclude_args+="--exclude=$pattern "
-        done
-        
-        if eval "tar -czf '$BACKUP_DIR/$BOT_DIR_ARCHIVE' $exclude_args -C '$(dirname "$BOT_BACKUP_PATH")' '$(basename "$BOT_BACKUP_PATH")'"; then
-            print_message "SUCCESS" "$(t cbot_archived)"
-        else
-            print_message "ERROR" "$(t cbot_arch_err)"
-            return 1
-        fi
-    else
-        print_message "WARN" "$(t cbot_dir_missing)"
-        return 0
-    fi
-    
-    BACKUP_ITEMS+=("$BOT_BACKUP_FILE_DB" "$BOT_DIR_ARCHIVE")
-    
-    print_message "SUCCESS" "$(t cbot_done)"
-    echo ""
-    return 0
-}
-
-restore_bot_backup() {
-    local temp_restore_dir="$1"
-    
-    local BOT_DUMP_FILE=$(find "$temp_restore_dir" -name "bot_dump_*.sql.gz" | head -n 1)
-    local BOT_DIR_ARCHIVE=$(find "$temp_restore_dir" -name "bot_dir_*.tar.gz" | head -n 1)
-    
-    if [[ -z "$BOT_DUMP_FILE" && -z "$BOT_DIR_ARCHIVE" ]]; then
-        return 2
-    fi
-
-    check_docker_installed || return 1
-
-    clear
-    print_message "INFO" "$(t rbot_found)"
-    echo ""
-    read -rp "$(echo -e "${GREEN}[?]${RESET} $(t rbot_restore_q) ${GREEN}${BOLD}Y${RESET}/${RED}${BOLD}N${RESET}: ")" restore_bot_confirm
-    
-    if [[ ! "$restore_bot_confirm" =~ ^[yY]$ ]]; then
-        print_message "INFO" "$(t rbot_cancelled)"
-        return 1
-    fi
-    
-    echo ""
-    print_message "WARN" "${YELLOW}$(t rbot_warn_stop)${RESET}"
-    print_message "WARN" "$(t rbot_warn_conflict)"
-    echo ""
-    read -rp "$(echo -e "${GREEN}[?]${RESET} $(t rbot_continue_q) ${GREEN}${BOLD}Y${RESET}/${RED}${BOLD}N${RESET}: ")" stop_confirm
-    
-    if [[ ! "$stop_confirm" =~ ^[yY]$ ]]; then
-        print_message "INFO" "$(t rbot_stop_first)"
-        return 1
-    fi
-    
-    echo ""
-    print_message "ACTION" "$(t rbot_which)"
-    echo " 1. $(t bot_jesus)"
-    echo " 2. $(t bot_jesus_priv)"
-    echo " 3. $(t bot_machka)"
-    echo " 4. $(t bot_snoups)"
-    echo ""
-    
-    local bot_choice
-    local selected_bot_name
-    while true; do
-        read -rp " ${GREEN}[?]${RESET} $(t rbot_select)" bot_choice
-        case "$bot_choice" in
-            1) selected_bot_name="Бот от Иисуса"; break ;;
-            2) selected_bot_name="Приватный бот от Иисуса"; break ;;
-            3) selected_bot_name="Бот от Мачки"; break ;;
-            4) selected_bot_name="Бот от Snoups"; break ;;
-            *) print_message "ERROR" "$(t invalid_input)" ;;
-        esac
-    done
-    
-    echo ""
-    print_message "ACTION" "$(t rbot_select_path)"
-    local _bot_params_tmp=$(get_bot_params "$selected_bot_name")
-    local _bot_dir_name
-    IFS='|' read -r _ _ _bot_dir_name _ <<< "$_bot_params_tmp"
-    
-    echo " 1. /opt/$_bot_dir_name"
-    echo " 2. /root/$_bot_dir_name"
-    echo " 3. /opt/stacks/$_bot_dir_name"
-    echo " 4. $(t custom_path)"
-    echo ""
-    echo " 0. $(t back)"
-    echo ""
-
-    local restore_path
-    local path_choice
-    while true; do
-        read -rp " ${GREEN}[?]${RESET} $(t path_prompt)" path_choice
-        case "$path_choice" in
-        1) restore_path="/opt/$_bot_dir_name"; break ;;
-        2) restore_path="/root/$_bot_dir_name"; break ;;
-        3) restore_path="/opt/stacks/$_bot_dir_name"; break ;;
-        4)
-            echo ""
-            print_message "INFO" "$(t rbot_enter_path)"
-            read -rp " $(t path_prompt)" custom_restore_path
-        
-            if [[ -z "$custom_restore_path" ]]; then
-                print_message "ERROR" "$(t rbot_path_empty)"
-                echo ""
-                read -rp "$(t press_enter)"
-                continue
-            fi
-        
-            if [[ ! "$custom_restore_path" = /* ]]; then
-                print_message "ERROR" "$(t rbot_path_abs)"
-                echo ""
-                read -rp "$(t press_enter)"
-                continue
-            fi
-        
-            custom_restore_path="${custom_restore_path%/}"
-            restore_path="$custom_restore_path"
-            print_message "SUCCESS" "$(t rbot_custom_set) ${BOLD}${restore_path}${RESET}"
-            break
-            ;;
-        0)
-            print_message "INFO" "$(t rbot_cancelled)"
-            return 0
-            ;;
-        *)
-            print_message "ERROR" "$(t invalid_input)"
-            ;;
-        esac
-    done
-
-    local bot_params=$(get_bot_params "$selected_bot_name")
-    IFS='|' read -r BOT_CONTAINER_NAME BOT_VOLUME_NAME BOT_DIR_NAME BOT_SERVICE_NAME <<< "$bot_params"
-    
-    echo ""
-    read -rp "$(echo -e "${GREEN}[?]${RESET} $(t rbot_db_user)")" restore_bot_db_user
-    restore_bot_db_user="${restore_bot_db_user:-postgres}"
-    echo ""
-    read -rp "$(echo -e "${GREEN}[?]${RESET} $(t rbot_db_name)")" restore_bot_db_name
-    restore_bot_db_name="${restore_bot_db_name:-postgres}"
-    echo ""
-    print_message "INFO" "$(t rbot_starting)"
-    
-    if [[ -d "$restore_path" ]]; then
-        print_message "INFO" "$(t rbot_exists_stop)"
-    
-        if cd "$restore_path" 2>/dev/null && ([[ -f "docker-compose.yml" ]] || [[ -f "docker-compose.yaml" ]] || [[ -f "compose.yml" ]] || [[ -f "compose.yaml" ]]); then
-            print_message "INFO" "$(t rbot_stopping)"
-            docker compose down 2>/dev/null || print_message "WARN" "$(t rbot_stop_fail)"
-        else
-            print_message "INFO" "$(t rbot_no_compose)"
-        fi
-    fi
-        
-    cd /
-        
-    print_message "INFO" "$(t rbot_rm_old)"
-    if [[ -d "$restore_path" ]]; then
-        if ! rm -rf "$restore_path"; then
-            print_message "ERROR" "$(t rbot_rm_fail) ${BOLD}${restore_path}${RESET}."
-            return 1
-        fi
-        print_message "SUCCESS" "$(t rbot_rm_done)"
-    else
-        print_message "INFO" "$(t rbot_clean_install)"
-    fi
-    
-    print_message "INFO" "$(t rbot_mkdir)"
-    if ! mkdir -p "$restore_path"; then
-        print_message "ERROR" "$(t rbot_mkdir_fail) ${BOLD}${restore_path}${RESET}."
-        return 1
-    fi
-    print_message "SUCCESS" "$(t rbot_mkdir_done)"
-    echo ""
-    
-    if [[ -n "$BOT_DIR_ARCHIVE" ]]; then
-        print_message "INFO" "$(t rbot_unpack_dir)"
-        local temp_extract_dir="$BACKUP_DIR/bot_extract_temp_$$"
-        mkdir -p "$temp_extract_dir"
-        
-        if tar -xzf "$BOT_DIR_ARCHIVE" -C "$temp_extract_dir"; then
-            local extracted_dir=$(find "$temp_extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
-
-            if [[ -n "$extracted_dir" && -d "$extracted_dir" ]]; then
-                if cp -rf "$extracted_dir"/. "$restore_path/" 2>/dev/null; then
-                    print_message "SUCCESS" "$(t rbot_files_ok) $(basename "$extracted_dir"))."
-                else
-                    print_message "ERROR" "$(t rbot_copy_err)"
-                    rm -rf "$temp_extract_dir"
-                    return 1
-                fi
-            else
-                print_message "ERROR" "$(t rbot_extract_err)"
-                rm -rf "$temp_extract_dir"
-                return 1
-            fi
-        else
-            print_message "ERROR" "$(t rbot_unpack_err)"
-            rm -rf "$temp_extract_dir"
-            return 1
-        fi
-        rm -rf "$temp_extract_dir"
-    else
-        print_message "WARN" "$(t rbot_no_archive)"
-        return 1
-    fi
-    
-    print_message "INFO" "$(t rbot_check_vol)"
-    if docker volume ls -q | grep -Fxq "$BOT_VOLUME_NAME"; then
-        local containers_using_volume
-        containers_using_volume=$(docker ps -aq --filter volume="$BOT_VOLUME_NAME")
-    
-        if [[ -n "$containers_using_volume" ]]; then
-            print_message "INFO" "$(t rbot_vol_used)"
-            docker rm -f $containers_using_volume >/dev/null 2>&1
-        fi
-    
-        if docker volume rm "$BOT_VOLUME_NAME" >/dev/null 2>&1; then
-            print_message "SUCCESS" "$(t rbot_vol_rm) $BOT_VOLUME_NAME."
-        else
-            print_message "WARN" "$(t rbot_vol_rm_fail) $BOT_VOLUME_NAME."
-        fi
-    else
-        print_message "INFO" "$(t rbot_no_vols)"
-    fi
-    echo ""
-    
-    if ! cd "$restore_path"; then
-        print_message "ERROR" "$(t rbot_cd_fail) ${BOLD}${restore_path}${RESET}."
-        return 1
-    fi
-    
-    if [[ ! -f "docker-compose.yml" && ! -f "docker-compose.yaml" && ! -f "compose.yml" && ! -f "compose.yaml" ]]; then
-    print_message "ERROR" "$(t rbot_no_yml)"
-    return 1
-    fi
-    
-    print_message "INFO" "$(t rbot_start_db)"
-    if ! docker compose up -d "$BOT_SERVICE_NAME"; then
-        print_message "ERROR" "$(t rbot_db_fail)"
-        return 1
-    fi
-    
-    echo ""
-    print_message "INFO" "$(t rbot_wait_db)"
-    local wait_count=0
-    local max_wait=60
-    
-    until [ "$(docker inspect --format='{{.State.Health.Status}}' "$BOT_CONTAINER_NAME" 2>/dev/null)" == "healthy" ]; do
-        sleep 2
-        echo -n "."
-        wait_count=$((wait_count + 1))
-        if [ $wait_count -gt $max_wait ]; then
-            echo ""
-            print_message "ERROR" "$(t rbot_db_timeout)"
-            return 1
-        fi
-    done
-    echo ""
-    print_message "SUCCESS" "$(t rbot_db_ready)"
-    
-    if [[ -n "$BOT_DUMP_FILE" ]]; then
-        print_message "INFO" "$(t rbot_restore_db)"
-        local BOT_DUMP_UNCOMPRESSED="${BOT_DUMP_FILE%.gz}"
-        
-        if ! gunzip "$BOT_DUMP_FILE"; then
-            print_message "ERROR" "$(t rbot_gunzip_fail)"
-            return 1
-        fi
-        
-        mkdir -p "$temp_restore_dir"
-
-        if ! docker exec -i "$BOT_CONTAINER_NAME" psql -q -U "$restore_bot_db_user" -d "$restore_bot_db_name" > /dev/null 2> "$temp_restore_dir/restore_errors.log" < "$BOT_DUMP_UNCOMPRESSED"; then
-            print_message "ERROR" "$(t rbot_db_err)"
-            echo ""
-            if [[ -f "$temp_restore_dir/restore_errors.log" ]]; then
-                print_message "WARN" "${YELLOW}$(t rbot_err_log)${RESET}"
-                cat "$temp_restore_dir/restore_errors.log"
-            fi
-            [[ -d "$temp_restore_dir" ]] && rm -rf "$temp_restore_dir"
-            echo ""
-            read -rp "$(t press_enter_back)"
-            return 1
-        fi
-
-        print_message "SUCCESS" "$(t rbot_db_ok)"
-    else
-        print_message "WARN" "$(t rbot_no_dump)"
-    fi
-    
-    echo ""
-    print_message "INFO" "$(t rbot_start_all)"
-    if ! docker compose up -d; then
-        print_message "ERROR" "$(t rbot_start_fail)"
-        return 1
-    fi
-    
-    sleep 3
-    return 0
-}
 
 save_config() {
     print_message "INFO" "$(t saving_config) ${BOLD}${CONFIG_FILE}${RESET}..."
@@ -713,11 +278,9 @@ CRON_TIMES="$CRON_TIMES"
 REMNALABS_ROOT_DIR="$REMNALABS_ROOT_DIR"
 TG_MESSAGE_THREAD_ID="$TG_MESSAGE_THREAD_ID"
 TG_PROXY="$TG_PROXY"
-BOT_BACKUP_ENABLED="$BOT_BACKUP_ENABLED"
-BOT_BACKUP_PATH="$BOT_BACKUP_PATH"
-BOT_BACKUP_SELECTED="$BOT_BACKUP_SELECTED"
-BOT_BACKUP_DB_USER="$BOT_BACKUP_DB_USER"
-SKIP_PANEL_BACKUP="$SKIP_PANEL_BACKUP"
+REMNAWAVE_ENABLED="$REMNAWAVE_ENABLED"
+SHM_ENABLED="$SHM_ENABLED"
+SHM_ROOT_DIR="$SHM_ROOT_DIR"
 DB_CONNECTION_TYPE="$DB_CONNECTION_TYPE"
 DB_HOST="$DB_HOST"
 DB_PORT="$DB_PORT"
@@ -744,7 +307,9 @@ load_or_create_config() {
         REMNALABS_ROOT_DIR=${REMNALABS_ROOT_DIR:-}
         TG_MESSAGE_THREAD_ID=${TG_MESSAGE_THREAD_ID:-}
         TG_PROXY=${TG_PROXY:-}
-        SKIP_PANEL_BACKUP=${SKIP_PANEL_BACKUP:-false}
+        REMNAWAVE_ENABLED=${REMNAWAVE_ENABLED:-false}
+        SHM_ENABLED=${SHM_ENABLED:-false}
+        SHM_ROOT_DIR=${SHM_ROOT_DIR:-}
         DB_CONNECTION_TYPE=${DB_CONNECTION_TYPE:-docker}
         DB_HOST=${DB_HOST:-}
         DB_PORT=${DB_PORT:-5432}
@@ -777,7 +342,7 @@ load_or_create_config() {
             print_message "WARN" "$(t cfg_tg_not_configured)"
         fi
 
-        if [[ "$SKIP_PANEL_BACKUP" != "true" && -z "$DB_USER" ]]; then
+        if [[ "$REMNAWAVE_ENABLED" == "true" && -z "$DB_USER" ]]; then
             print_message "INFO" "$(t cfg_enter_db_user)"
             read -rp "    $(t input_prompt)" input_db_user
             DB_USER=${input_db_user:-postgres}
@@ -785,7 +350,7 @@ load_or_create_config() {
             echo ""
         fi
         
-        if [[ "$SKIP_PANEL_BACKUP" != "true" && -z "$REMNALABS_ROOT_DIR" ]]; then
+        if [[ "$REMNAWAVE_ENABLED" == "true" && -z "$REMNALABS_ROOT_DIR" ]]; then
             print_message "ACTION" "$(t cfg_where_panel)"
             echo " 1. /opt/remnawave"
             echo " 2. /root/remnawave"
@@ -834,6 +399,51 @@ load_or_create_config() {
                     REMNALABS_ROOT_DIR="$custom_remnawave_path"
                     print_message "SUCCESS" "$(t cfg_custom_set) ${BOLD}${REMNALABS_ROOT_DIR}${RESET}"
                     break 
+                    ;;
+                *) print_message "ERROR" "$(t invalid_input)" ;;
+                esac
+            done
+            config_updated=true
+            echo ""
+        fi
+
+        if [[ "$SHM_ENABLED" == "true" && -z "$SHM_ROOT_DIR" ]]; then
+            print_message "ACTION" "$(t cfg_where_shm)"
+            echo " 1. /opt/shm"
+            echo " 2. /root/shm"
+            echo " 3. /opt/stacks/shm"
+            echo " 4. $(t custom_path)"
+            echo ""
+
+            local shm_path_choice
+            while true; do
+                read -rp " ${GREEN}[?]${RESET} $(t select_variant)" shm_path_choice
+                case "$shm_path_choice" in
+                1) SHM_ROOT_DIR="/opt/shm"; break ;;
+                2) SHM_ROOT_DIR="/root/shm"; break ;;
+                3) SHM_ROOT_DIR="/opt/stacks/shm"; break ;;
+                4)
+                    echo ""
+                    print_message "INFO" "$(t cfg_enter_shm_path)"
+                    read -rp " $(t path_prompt)" custom_shm_path
+
+                    if [[ -z "$custom_shm_path" ]]; then
+                        print_message "ERROR" "$(t cfg_path_empty)"
+                        echo ""
+                        read -rp "$(t press_enter)"
+                        continue
+                    fi
+
+                    if [[ ! "$custom_shm_path" = /* ]]; then
+                        print_message "ERROR" "$(t cfg_path_abs)"
+                        echo ""
+                        read -rp "$(t press_enter)"
+                        continue
+                    fi
+
+                    SHM_ROOT_DIR="${custom_shm_path%/}"
+                    print_message "SUCCESS" "$(t cfg_custom_set) ${BOLD}${SHM_ROOT_DIR}${RESET}"
+                    break
                     ;;
                 *) print_message "ERROR" "$(t invalid_input)" ;;
                 esac
@@ -942,19 +552,113 @@ load_or_create_config() {
             select_language_interactive
             echo ""
 
-            print_message "ACTION" "$(t cfg_select_mode)"
-            echo " 1. $(t cfg_mode_full)"
-            echo " 2. $(t cfg_mode_bot)"
-            echo ""
-            read -rp " ${GREEN}[?]${RESET} $(t your_choice)" main_mode_choice
-            
-            if [[ "$main_mode_choice" == "2" ]]; then
-                SKIP_PANEL_BACKUP="true"
-                REMNALABS_ROOT_DIR="none"
-            else
-                SKIP_PANEL_BACKUP="false"
-            fi
-            echo ""
+            while true; do
+                local _setup_remnawave _setup_shm
+
+                print_message "ACTION" "$(t cfg_enable_remnawave)"
+                echo " 1. $(t yes_option)"
+                echo " 2. $(t no_option)"
+                echo ""
+                read -rp " ${GREEN}[?]${RESET} $(t your_choice)" _setup_remnawave
+                echo ""
+
+                if [[ "$_setup_remnawave" == "1" ]]; then
+                    REMNAWAVE_ENABLED="true"
+
+                    print_message "INFO" "$(t cfg_enter_db_user_default)"
+                    read -rp "    $(t input_prompt)" input_db_user
+                    DB_USER=${input_db_user:-postgres}
+                    echo ""
+
+                    print_message "ACTION" "$(t cfg_where_panel)"
+                    echo " 1. /opt/remnawave"
+                    echo " 2. /root/remnawave"
+                    echo " 3. /opt/stacks/remnawave"
+                    echo " 4. $(t custom_path)"
+                    echo ""
+
+                    local remnawave_path_choice
+                    while true; do
+                        read -rp " ${GREEN}[?]${RESET} $(t select_variant)" remnawave_path_choice
+                        case "$remnawave_path_choice" in
+                        1) REMNALABS_ROOT_DIR="/opt/remnawave"; break ;;
+                        2) REMNALABS_ROOT_DIR="/root/remnawave"; break ;;
+                        3) REMNALABS_ROOT_DIR="/opt/stacks/remnawave"; break ;;
+                        4)
+                            echo ""
+                            print_message "INFO" "$(t cfg_enter_panel_path)"
+                            read -rp " $(t path_prompt)" custom_remnawave_path
+                            if [[ -n "$custom_remnawave_path" ]]; then
+                                REMNALABS_ROOT_DIR="${custom_remnawave_path%/}"
+                                break
+                            fi
+                            ;;
+                        *) print_message "ERROR" "$(t invalid_input)" ;;
+                        esac
+                    done
+                    echo ""
+                else
+                    REMNAWAVE_ENABLED="false"
+                fi
+
+                print_message "ACTION" "$(t cfg_enable_shm)"
+                echo " 1. $(t yes_option)"
+                echo " 2. $(t no_option)"
+                echo ""
+                read -rp " ${GREEN}[?]${RESET} $(t your_choice)" _setup_shm
+                echo ""
+
+                if [[ "$_setup_shm" == "1" ]]; then
+                    SHM_ENABLED="true"
+                    print_message "INFO" "$(t cfg_shm_backup_info)"
+                    echo ""
+
+                    print_message "ACTION" "$(t cfg_where_shm)"
+                    echo " 1. /opt/shm"
+                    echo " 2. /root/shm"
+                    echo " 3. /opt/stacks/shm"
+                    echo " 4. $(t custom_path)"
+                    echo ""
+
+                    local shm_path_choice
+                    while true; do
+                        read -rp " ${GREEN}[?]${RESET} $(t select_variant)" shm_path_choice
+                        case "$shm_path_choice" in
+                        1) SHM_ROOT_DIR="/opt/shm"; break ;;
+                        2) SHM_ROOT_DIR="/root/shm"; break ;;
+                        3) SHM_ROOT_DIR="/opt/stacks/shm"; break ;;
+                        4)
+                            echo ""
+                            print_message "INFO" "$(t cfg_enter_shm_path)"
+                            read -rp " $(t path_prompt)" custom_shm_path
+                            if [[ -n "$custom_shm_path" ]]; then
+                                SHM_ROOT_DIR="${custom_shm_path%/}"
+                                break
+                            fi
+                            ;;
+                        *) print_message "ERROR" "$(t invalid_input)" ;;
+                        esac
+                    done
+                    echo ""
+                else
+                    SHM_ENABLED="false"
+                fi
+
+                if [[ "$REMNAWAVE_ENABLED" != "true" && "$SHM_ENABLED" != "true" ]]; then
+                    print_message "WARN" "$(t cfg_nothing_selected)"
+                    echo ""
+                    echo " 1. $(t cfg_restart_setup)"
+                    echo " 0. $(t exit)"
+                    echo ""
+                    read -rp " ${GREEN}[?]${RESET} $(t your_choice)" _nothing_choice
+                    if [[ "$_nothing_choice" == "0" ]]; then
+                        exit 0
+                    fi
+                    continue
+                fi
+
+                break
+            done
 
             print_message "INFO" "$(t cfg_tg_setup)"
             print_message "INFO" "$(t cfg_create_bot)"
@@ -970,40 +674,6 @@ load_or_create_config() {
             echo -e "       $(t cfg_thread_empty)"
             read -rp "    $(t cfg_enter_thread)" TG_MESSAGE_THREAD_ID
             echo ""
-
-            if [[ "$SKIP_PANEL_BACKUP" == "false" ]]; then
-                print_message "INFO" "$(t cfg_enter_db_user_default)"
-                read -rp "    $(t input_prompt)" input_db_user
-                DB_USER=${input_db_user:-postgres}
-                echo ""
-
-                print_message "ACTION" "$(t cfg_where_panel)"
-                echo " 1. /opt/remnawave"
-                echo " 2. /root/remnawave"
-                echo " 3. /opt/stacks/remnawave"
-                echo " 4. $(t custom_path)"
-                echo ""
-
-                local remnawave_path_choice
-                while true; do
-                    read -rp " ${GREEN}[?]${RESET} $(t select_variant)" remnawave_path_choice
-                    case "$remnawave_path_choice" in
-                    1) REMNALABS_ROOT_DIR="/opt/remnawave"; break ;;
-                    2) REMNALABS_ROOT_DIR="/root/remnawave"; break ;;
-                    3) REMNALABS_ROOT_DIR="/opt/stacks/remnawave"; break ;;
-                    4) 
-                        echo ""
-                        print_message "INFO" "$(t cfg_enter_panel_path)"
-                        read -rp " $(t path_prompt)" custom_remnawave_path
-                        if [[ -n "$custom_remnawave_path" ]]; then
-                            REMNALABS_ROOT_DIR="${custom_remnawave_path%/}"
-                            break
-                        fi
-                        ;;
-                    *) print_message "ERROR" "$(t invalid_input)" ;;
-                    esac
-                done
-            fi
 
             mkdir -p "$INSTALL_DIR"
             mkdir -p "$BACKUP_DIR"
@@ -1413,7 +1083,7 @@ cleanup_s3_old_backups() {
                 AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
                 AWS_DEFAULT_REGION="$S3_REGION" \
                 aws s3 ls "s3://${S3_BUCKET}/${s3_prefix_arg}" \
-                $s3_endpoint_arg 2>/dev/null | grep "remnawave_backup_.*\.tar\.gz")
+                $s3_endpoint_arg 2>/dev/null | grep -E "remnawave_backup_.*\.tar\.gz|shm_backup_.*\.tar\.gz")
 
     if [[ -z "$file_list" ]]; then
         return 0
@@ -1439,16 +1109,90 @@ cleanup_s3_old_backups() {
     fi
 }
 
+send_backup_file() {
+    local final_file="$1"
+    local backup_info="$2"
+    local db_mode_info="$3"
+
+    local DATE
+    DATE=$(date +'%Y-%m-%d %H:%M:%S')
+    local backup_size
+    backup_size=$(du -h "$final_file" | awk '{print $1}')
+
+    print_message "INFO" "$(t bk_sending) (${UPLOAD_METHOD})..."
+
+    local caption_text="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_success)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
+
+    if [[ -f "$final_file" ]]; then
+        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+            local file_size_bytes
+            file_size_bytes=$(stat -c%s "$final_file" 2>/dev/null || stat -f%z "$final_file" 2>/dev/null || echo "0")
+            local max_tg_size=$((50 * 1024 * 1024))
+            if [[ "$file_size_bytes" -gt "$max_tg_size" ]]; then
+                print_message "ERROR" "$(printf "$(t bk_tg_big)" "$backup_size")"
+                print_message "INFO" "$(t bk_saved_local) ${BOLD}${final_file}${RESET}"
+                send_telegram_message "⚠️ $(printf "$(t bk_tg_big_notify)" "$backup_size")" "None" 2>/dev/null
+            elif send_telegram_document "$final_file" "$caption_text"; then
+                print_message "SUCCESS" "$(t bk_tg_ok)"
+            else
+                echo -e "${RED}❌ $(t bk_tg_err)${RESET}"
+            fi
+        elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
+            if send_google_drive_document "$final_file"; then
+                print_message "SUCCESS" "$(t bk_gd_ok)"
+                local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_gd)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
+                if send_telegram_message "$tg_success_message"; then
+                    print_message "SUCCESS" "$(t bk_gd_notify_ok)"
+                else
+                    print_message "ERROR" "$(t bk_gd_notify_fail)"
+                fi
+            else
+                echo -e "${RED}❌ $(t bk_gd_err)${RESET}"
+                send_telegram_message "❌ $(t bk_gd_err_tg)" "None"
+            fi
+        elif [[ "$UPLOAD_METHOD" == "s3" ]]; then
+            if send_s3_document "$final_file"; then
+                print_message "SUCCESS" "$(t bk_s3_ok)"
+                local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_s3)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
+                if send_telegram_message "$tg_success_message"; then
+                    print_message "SUCCESS" "$(t bk_s3_notify_ok)"
+                else
+                    print_message "ERROR" "$(t bk_s3_notify_fail)"
+                fi
+            else
+                echo -e "${RED}❌ $(t bk_s3_err)${RESET}"
+                send_telegram_message "❌ $(t bk_s3_err_tg)" "None"
+            fi
+        else
+            print_message "WARN" "$(t bk_unknown_method) ${BOLD}${UPLOAD_METHOD}${RESET}. $(t bk_not_sent)"
+            send_telegram_message "❌ $(t bk_unknown_method) ${BOLD}${UPLOAD_METHOD}${RESET}" "None"
+        fi
+    else
+        echo -e "${RED}❌ $(t bk_file_missing) ${BOLD}${final_file}${RESET}. $(t bk_impossible)${RESET}"
+        local error_msg="❌ $(t bk_file_missing) ${BOLD}$(basename "$final_file")${RESET}"
+        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+            send_telegram_message "$error_msg" "None"
+        elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
+            print_message "ERROR" "$(t bk_gd_impossible)"
+        elif [[ "$UPLOAD_METHOD" == "s3" ]]; then
+            print_message "ERROR" "$(t bk_s3_impossible)"
+        fi
+        exit 1
+    fi
+}
+
 create_backup() {
     print_message "INFO" "$(t bk_starting)"
     echo ""
     
-    if [[ "$DB_CONNECTION_TYPE" == "external" ]]; then
-        print_message "INFO" "$(t bk_mode_ext) (${DB_HOST}:${DB_PORT}/${DB_NAME})"
-    else
-        print_message "INFO" "$(t bk_mode_docker)"
+    if [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+        if [[ "$DB_CONNECTION_TYPE" == "external" ]]; then
+            print_message "INFO" "$(t bk_mode_ext) (${DB_HOST}:${DB_PORT}/${DB_NAME})"
+        else
+            print_message "INFO" "$(t bk_mode_docker)"
+        fi
+        echo ""
     fi
-    echo ""
     
     REMNAWAVE_VERSION=$(get_remnawave_version)
     TIMESTAMP=$(date +%Y-%m-%d"_"%H_%M_%S)
@@ -1462,10 +1206,39 @@ create_backup() {
     }
     
     BACKUP_ITEMS=()
-    
-    if [[ "$SKIP_PANEL_BACKUP" == "true" ]]; then
+
+    local _do_rw="false"
+    local _do_shm="false"
+
+    if [[ "$REMNAWAVE_ENABLED" == "true" && "$SHM_ENABLED" == "true" ]]; then
+        echo ""
+        print_message "ACTION" "$(t bk_select_source)"
+        echo " 1. $(t src_remnawave)"
+        echo " 2. $(t src_shm)"
+        echo " 3. $(t bk_source_both)"
+        echo ""
+        local _src_choice
+        while true; do
+            read -rp " ${GREEN}[?]${RESET} $(t your_choice)" _src_choice
+            case "$_src_choice" in
+                1) _do_rw="true"; break ;;
+                2) _do_shm="true"; break ;;
+                3) _do_rw="true"; _do_shm="true"; break ;;
+                *) print_message "ERROR" "$(t invalid_input)" ;;
+            esac
+        done
+        echo ""
+    elif [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+        _do_rw="true"
+    elif [[ "$SHM_ENABLED" == "true" ]]; then
+        _do_shm="true"
+    fi
+
+    if [[ "$REMNAWAVE_ENABLED" == "true" && "$_do_rw" != "true" ]]; then
         print_message "INFO" "$(t bk_skip_panel)"
-    else
+    fi
+
+    if [[ "$_do_rw" == "true" ]]; then
         print_message "INFO" "$(t bk_creating_dump)"
         if ! create_panel_db_dump "$BACKUP_DIR/$BACKUP_FILE_DB"; then
             local STATUS=$?
@@ -1513,139 +1286,122 @@ create_backup() {
     fi
     
     echo ""
-    
-    create_bot_backup
-    
-    if [[ ${#BACKUP_ITEMS[@]} -eq 0 ]]; then
-        print_message "ERROR" "$(t bk_no_data)"
-        exit 1
-    fi
-    
-    local DUMP_TYPE
-    if [[ "$DB_CONNECTION_TYPE" == "docker" ]]; then
-        DUMP_TYPE="dumpall"
-    else
-        DUMP_TYPE="dump"
-    fi
-    
-    cat > "$BACKUP_DIR/backup_meta.info" <<METAEOF
+
+    # ── Remnawave pass ──────────────────────────────────────────────────────────
+    if [[ "$_do_rw" == "true" ]]; then
+        if [[ ${#BACKUP_ITEMS[@]} -eq 0 ]]; then
+            print_message "ERROR" "$(t bk_no_data)"
+            exit 1
+        fi
+
+        local DUMP_TYPE
+        if [[ "$DB_CONNECTION_TYPE" == "docker" ]]; then
+            DUMP_TYPE="dumpall"
+        else
+            DUMP_TYPE="dump"
+        fi
+
+        cat > "$BACKUP_DIR/rw_meta.info" <<METAEOF
 DUMP_TYPE="$DUMP_TYPE"
 DB_CONNECTION_TYPE="$DB_CONNECTION_TYPE"
 DB_NAME="$DB_NAME"
 BACKUP_VERSION="$VERSION"
 PANEL_VERSION="$REMNAWAVE_VERSION"
 TIMESTAMP="$TIMESTAMP"
+SOURCE="remnawave"
 METAEOF
-    BACKUP_ITEMS+=("backup_meta.info")
-    
-    if ! tar -czf "$BACKUP_DIR/$BACKUP_FILE_FINAL" -C "$BACKUP_DIR" "${BACKUP_ITEMS[@]}"; then
-        STATUS=$?
-        echo -e "${RED}❌ $(t bk_final_err) ${BOLD}$STATUS${RESET}.${RESET}"
-        local error_msg="❌ $(t bk_final_err) ${BOLD}${STATUS}${RESET}"
-        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
-            send_telegram_message "$error_msg" "None"
+        BACKUP_ITEMS+=("rw_meta.info")
+
+        if ! tar -czf "$BACKUP_DIR/$BACKUP_FILE_FINAL" -C "$BACKUP_DIR" "${BACKUP_ITEMS[@]}"; then
+            local _rw_tar_status=$?
+            echo -e "${RED}❌ $(t bk_final_err) ${BOLD}${_rw_tar_status}${RESET}.${RESET}"
+            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+                send_telegram_message "❌ $(t bk_final_err) ${BOLD}${_rw_tar_status}${RESET}" "None"
+            fi
+            exit $_rw_tar_status
         fi
-        exit $STATUS
-    fi
-    
-    print_message "SUCCESS" "$(t bk_final_ok) ${BOLD}${BACKUP_DIR}/${BACKUP_FILE_FINAL}${RESET}"
-    echo ""
-    
-    print_message "INFO" "$(t bk_cleaning)"
-    for item in "${BACKUP_ITEMS[@]}"; do
-        rm -f "$BACKUP_DIR/$item"
-    done
-    print_message "SUCCESS" "$(t bk_cleaned)"
-    echo ""
-    
-    print_message "INFO" "$(t bk_sending) (${UPLOAD_METHOD})..."
-    
-    local DATE=$(date +'%Y-%m-%d %H:%M:%S')
-    local backup_size=$(du -h "$BACKUP_DIR/$BACKUP_FILE_FINAL" | awk '{print $1}')
-    
-    local backup_info=""
-    if [[ "$SKIP_PANEL_BACKUP" == "true" ]]; then
-        backup_info=$'\n'"🤖 *$(t tg_only_bot)*"
-    elif [[ "$BOT_BACKUP_ENABLED" == "true" ]]; then
-        backup_info=$'\n'"🌊 *Remnawave:* ${REMNAWAVE_VERSION}"$'\n'"🤖 *$(t tg_plus_bot)*"
-    else
-        backup_info=$'\n'"🌊 *Remnawave:* ${REMNAWAVE_VERSION}"$'\n'"🖥️ *$(t tg_only_panel)*"
-    fi
-    
-    local db_mode_info=""
-    if [[ "$DB_CONNECTION_TYPE" == "external" ]]; then
-        db_mode_info=$'\n'"🔗 *$(t tg_db_ext)* (${DB_HOST})"
-    else
-        db_mode_info=$'\n'"🐳 *$(t tg_db_docker)*"
+
+        print_message "SUCCESS" "$(t bk_final_ok) ${BOLD}${BACKUP_DIR}/${BACKUP_FILE_FINAL}${RESET}"
+        echo ""
+
+        print_message "INFO" "$(t bk_cleaning)"
+        for item in "${BACKUP_ITEMS[@]}"; do
+            rm -f "$BACKUP_DIR/$item"
+        done
+        print_message "SUCCESS" "$(t bk_cleaned)"
+        echo ""
+
+        local _rw_backup_info=$'\n'"🌊 *Remnawave:* ${REMNAWAVE_VERSION}"
+        if [[ "$DB_CONNECTION_TYPE" == "external" ]]; then
+            _rw_backup_info+=$'\n'"🔗 *$(t tg_db_ext)* (${DB_HOST})"
+        else
+            _rw_backup_info+=$'\n'"🐳 *$(t tg_db_docker)*"
+        fi
+
+        send_backup_file "$BACKUP_DIR/$BACKUP_FILE_FINAL" "$_rw_backup_info" ""
+
+        echo ""
+        print_message "INFO" "$(printf "$(t bk_retention)" "$RETAIN_BACKUPS_DAYS")"
+        find "$BACKUP_DIR" -maxdepth 1 -name "remnawave_backup_*.tar.gz" -mtime +$RETAIN_BACKUPS_DAYS -delete
+        print_message "SUCCESS" "$(t bk_retention_ok)"
+        echo ""
     fi
 
-    local caption_text="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_success)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
-    
-    if [[ -f "$BACKUP_DIR/$BACKUP_FILE_FINAL" ]]; then
-        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
-            local file_size_bytes
-            file_size_bytes=$(stat -c%s "$BACKUP_DIR/$BACKUP_FILE_FINAL" 2>/dev/null || stat -f%z "$BACKUP_DIR/$BACKUP_FILE_FINAL" 2>/dev/null || echo "0")
-            local max_tg_size=$((50 * 1024 * 1024))
-            if [[ "$file_size_bytes" -gt "$max_tg_size" ]]; then
-                print_message "ERROR" "$(printf "$(t bk_tg_big)" "$backup_size")"
-                print_message "INFO" "$(t bk_saved_local) ${BOLD}${BACKUP_DIR}/${BACKUP_FILE_FINAL}${RESET}"
-                send_telegram_message "⚠️ $(printf "$(t bk_tg_big_notify)" "$backup_size")" "None" 2>/dev/null
-            elif send_telegram_document "$BACKUP_DIR/$BACKUP_FILE_FINAL" "$caption_text"; then
-                print_message "SUCCESS" "$(t bk_tg_ok)"
-            else
-                echo -e "${RED}❌ $(t bk_tg_err)${RESET}"
+    # ── SHM pass ────────────────────────────────────────────────────────────────
+    if [[ "$_do_shm" == "true" ]]; then
+        BACKUP_ITEMS=()
+        local SHM_BACKUP_FILE_FINAL="shm_backup_${TIMESTAMP}.tar.gz"
+
+        if ! create_shm_backup; then
+            print_message "ERROR" "$(t shm_backup_failed)"
+            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+                send_telegram_message "❌ $(t shm_backup_failed)" "None"
             fi
-        elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
-            if send_google_drive_document "$BACKUP_DIR/$BACKUP_FILE_FINAL"; then
-                print_message "SUCCESS" "$(t bk_gd_ok)"
-                local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_gd)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
-                
-                if send_telegram_message "$tg_success_message"; then
-                    print_message "SUCCESS" "$(t bk_gd_notify_ok)"
-                else
-                    print_message "ERROR" "$(t bk_gd_notify_fail)"
-                fi
-            else
-                echo -e "${RED}❌ $(t bk_gd_err)${RESET}"
-                send_telegram_message "❌ $(t bk_gd_err_tg)" "None"
-            fi
-        elif [[ "$UPLOAD_METHOD" == "s3" ]]; then
-            if send_s3_document "$BACKUP_DIR/$BACKUP_FILE_FINAL"; then
-                print_message "SUCCESS" "$(t bk_s3_ok)"
-                local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_s3)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
-                
-                if send_telegram_message "$tg_success_message"; then
-                    print_message "SUCCESS" "$(t bk_s3_notify_ok)"
-                else
-                    print_message "ERROR" "$(t bk_s3_notify_fail)"
-                fi
-            else
-                echo -e "${RED}❌ $(t bk_s3_err)${RESET}"
-                send_telegram_message "❌ $(t bk_s3_err_tg)" "None"
-            fi
-        else
-            print_message "WARN" "$(t bk_unknown_method) ${BOLD}${UPLOAD_METHOD}${RESET}. $(t bk_not_sent)"
-            send_telegram_message "❌ $(t bk_unknown_method) ${BOLD}${UPLOAD_METHOD}${RESET}" "None"
+            exit 1
         fi
-    else
-        echo -e "${RED}❌ $(t bk_file_missing) ${BOLD}${BACKUP_DIR}/${BACKUP_FILE_FINAL}${RESET}. $(t bk_impossible)${RESET}"
-        local error_msg="❌ $(t bk_file_missing) ${BOLD}${BACKUP_FILE_FINAL}${RESET}"
-        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
-            send_telegram_message "$error_msg" "None"
-        elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
-            print_message "ERROR" "$(t bk_gd_impossible)"
-        elif [[ "$UPLOAD_METHOD" == "s3" ]]; then
-            print_message "ERROR" "$(t bk_s3_impossible)"
+
+        if [[ ${#BACKUP_ITEMS[@]} -eq 0 ]]; then
+            print_message "ERROR" "$(t bk_no_data)"
+            exit 1
         fi
-        exit 1
+
+        cat > "$BACKUP_DIR/shm_meta.info" <<METAEOF
+BACKUP_VERSION="$VERSION"
+TIMESTAMP="$TIMESTAMP"
+SOURCE="shm"
+METAEOF
+        BACKUP_ITEMS+=("shm_meta.info")
+
+        if ! tar -czf "$BACKUP_DIR/$SHM_BACKUP_FILE_FINAL" -C "$BACKUP_DIR" "${BACKUP_ITEMS[@]}"; then
+            local _shm_tar_status=$?
+            echo -e "${RED}❌ $(t bk_final_err) ${BOLD}${_shm_tar_status}${RESET}.${RESET}"
+            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+                send_telegram_message "❌ $(t bk_final_err) ${BOLD}${_shm_tar_status}${RESET}" "None"
+            fi
+            exit $_shm_tar_status
+        fi
+
+        print_message "SUCCESS" "$(t bk_final_ok) ${BOLD}${BACKUP_DIR}/${SHM_BACKUP_FILE_FINAL}${RESET}"
+        echo ""
+
+        print_message "INFO" "$(t bk_cleaning)"
+        for item in "${BACKUP_ITEMS[@]}"; do
+            rm -f "$BACKUP_DIR/$item"
+        done
+        print_message "SUCCESS" "$(t bk_cleaned)"
+        echo ""
+
+        local _shm_backup_info=$'\n'"🖥️ *SHM*"
+
+        send_backup_file "$BACKUP_DIR/$SHM_BACKUP_FILE_FINAL" "$_shm_backup_info" ""
+
+        echo ""
+        print_message "INFO" "$(printf "$(t bk_retention)" "$RETAIN_BACKUPS_DAYS")"
+        find "$BACKUP_DIR" -maxdepth 1 -name "shm_backup_*.tar.gz" -mtime +$RETAIN_BACKUPS_DAYS -delete
+        print_message "SUCCESS" "$(t bk_retention_ok)"
+        echo ""
     fi
-    
-    echo ""
-    
-    print_message "INFO" "$(printf "$(t bk_retention)" "$RETAIN_BACKUPS_DAYS")"
-    find "$BACKUP_DIR" -maxdepth 1 -name "remnawave_backup_*.tar.gz" -mtime +$RETAIN_BACKUPS_DAYS -delete
-    print_message "SUCCESS" "$(t bk_retention_ok)"
-    
+
     if [[ "$UPLOAD_METHOD" == "s3" ]]; then
         print_message "INFO" "$(printf "$(t bk_s3_retention)" "$S3_RETAIN_DAYS")"
         cleanup_s3_old_backups
@@ -1679,7 +1435,7 @@ METAEOF
                             done
                             
                             local auto_update_msg="✅ *$(t tg_auto_updated)* ${CURRENT_VERSION} *$(t tg_auto_updated_to)* ${REMOTE_VERSION_LATEST}"
-                            local release_url="https://github.com/distillium/remnawave-backup-restore/releases/tag/${REMOTE_VERSION_LATEST}"
+                            local release_url="https://github.com/k0sha/rw-shm-backup-restore/releases/tag/${REMOTE_VERSION_LATEST}"
                             local keyboard="{\"inline_keyboard\":[[{\"text\":\"$(t tg_auto_update_changelog)\",\"url\":\"${release_url}\"}]]}"
 
                             curl -s -X POST ${TG_PROXY:+--proxy "$TG_PROXY"} "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
@@ -1870,13 +1626,6 @@ restore_backup() {
     echo "${GREEN}${BOLD}$(t rs_title)${RESET}"
     echo ""
     
-    if [[ "$DB_CONNECTION_TYPE" == "external" ]]; then
-        print_message "INFO" "$(t rs_mode_ext) (${DB_HOST}:${DB_PORT}/${DB_NAME})"
-    else
-        print_message "INFO" "$(t rs_mode_docker)"
-    fi
-    echo ""
-
     local S3_STREAM_RESTORE=false
 
     echo "$(t rs_source_select)"
@@ -1937,7 +1686,7 @@ restore_backup() {
                 AWS_SECRET_ACCESS_KEY="$rs_s3_secret" \
                 AWS_DEFAULT_REGION="$rs_s3_region" \
                 aws s3 ls "s3://${rs_s3_bucket}/${s3_prefix_arg}" \
-                $s3_endpoint_arg 2>/dev/null | grep "remnawave_backup_.*\.tar\.gz" | sort -r)
+                $s3_endpoint_arg 2>/dev/null | grep -E "remnawave_backup_.*\.tar\.gz|shm_backup_.*\.tar\.gz" | sort -r)
 
             if [[ -z "$s3_file_list" ]]; then
                 print_message "ERROR" "$(t rs_s3_no_files)"
@@ -2021,7 +1770,8 @@ restore_backup() {
         print_message "INFO" "$(t rs_place_file) ${BOLD}${BACKUP_DIR}${RESET}"
         echo ""
 
-        if ! compgen -G "$BACKUP_DIR/remnawave_backup_*.tar.gz" > /dev/null; then
+        if ! compgen -G "$BACKUP_DIR/remnawave_backup_*.tar.gz" > /dev/null && \
+           ! compgen -G "$BACKUP_DIR/shm_backup_*.tar.gz" > /dev/null; then
             print_message "ERROR" "$(t rs_no_files) ${BOLD}${BACKUP_DIR}${RESET}."
             rm -rf "$temp_restore_dir"
             read -rp "$(t press_enter_back)"
@@ -2029,7 +1779,7 @@ restore_backup() {
         fi
 
         readarray -t SORTED_BACKUP_FILES < <(
-            find "$BACKUP_DIR" -maxdepth 1 -name "remnawave_backup_*.tar.gz" -printf "%T@ %p\n" | sort -nr | cut -d' ' -f2-
+            find "$BACKUP_DIR" -maxdepth 1 \( -name "remnawave_backup_*.tar.gz" -o -name "shm_backup_*.tar.gz" \) -printf "%T@ %p\n" | sort -nr | cut -d' ' -f2-
         )
 
         echo ""
@@ -2072,13 +1822,13 @@ restore_backup() {
     local BACKUP_DUMP_TYPE="dumpall"
     local BACKUP_META_VERSION=""
     local BACKUP_META_DB_NAME=""
-    
-    if [[ -f "$temp_restore_dir/backup_meta.info" ]]; then
-        source "$temp_restore_dir/backup_meta.info"
+    local BACKUP_PANEL_VERSION=""
+
+    if [[ -f "$temp_restore_dir/rw_meta.info" ]]; then
+        source "$temp_restore_dir/rw_meta.info"
         BACKUP_DUMP_TYPE="${DUMP_TYPE:-dumpall}"
         BACKUP_META_VERSION="${BACKUP_VERSION:-}"
         BACKUP_META_DB_NAME="${DB_NAME:-}"
-        
         BACKUP_PANEL_VERSION="${PANEL_VERSION:-}"
         print_message "INFO" "$(t rs_meta)${BOLD}${BACKUP_DUMP_TYPE}${RESET}"
         print_message "INFO" "$(t rs_meta_ver)${BOLD}${BACKUP_META_VERSION:-$(t rs_meta_unknown)}${RESET}"
@@ -2180,11 +1930,47 @@ restore_backup() {
     PANEL_DUMP=$(find "$temp_restore_dir" -name "dump_*.sql.gz" | head -n 1)
     local PANEL_DIR_ARCHIVE
     PANEL_DIR_ARCHIVE=$(find "$temp_restore_dir" -name "remnawave_dir_*.tar.gz" | head -n 1)
+    local SHM_DUMP_CHECK
+    SHM_DUMP_CHECK=$(find "$temp_restore_dir" -name "shm_dump_*.sql.gz" | head -n 1)
+    local SHM_DIR_CHECK
+    SHM_DIR_CHECK=$(find "$temp_restore_dir" -name "shm_dir_*.tar.gz" | head -n 1)
 
-    local PANEL_STATUS=2 
-    local BOT_STATUS=2
+    local _has_rw=false
+    local _has_shm=false
+    [[ -n "$PANEL_DUMP" && -n "$PANEL_DIR_ARCHIVE" ]] && _has_rw=true
+    [[ -n "$SHM_DUMP_CHECK" || -n "$SHM_DIR_CHECK" ]] && _has_shm=true
 
-    if [[ -z "$PANEL_DUMP" || -z "$PANEL_DIR_ARCHIVE" ]]; then
+    local _restore_rw=false
+    local _restore_shm=false
+
+    if [[ "$_has_rw" == "true" && "$_has_shm" == "true" ]]; then
+        echo ""
+        print_message "ACTION" "$(t rs_select_source)"
+        echo " 1. $(t src_remnawave)"
+        echo " 2. $(t src_shm)"
+        echo " 3. $(t bk_source_both)"
+        echo ""
+        local _rs_choice
+        while true; do
+            read -rp " ${GREEN}[?]${RESET} $(t your_choice)" _rs_choice
+            case "$_rs_choice" in
+                1) _restore_rw=true; break ;;
+                2) _restore_shm=true; break ;;
+                3) _restore_rw=true; _restore_shm=true; break ;;
+                *) print_message "ERROR" "$(t invalid_input)" ;;
+            esac
+        done
+        echo ""
+    elif [[ "$_has_rw" == "true" ]]; then
+        _restore_rw=true
+    elif [[ "$_has_shm" == "true" ]]; then
+        _restore_shm=true
+    fi
+
+    local PANEL_STATUS=2
+    local SHM_STATUS=2
+
+    if [[ "$_restore_rw" != "true" || -z "$PANEL_DUMP" || -z "$PANEL_DIR_ARCHIVE" ]]; then
         print_message "WARN" "$(t rs_panel_missing)"
         PANEL_STATUS=2
     else
@@ -2309,26 +2095,29 @@ restore_backup() {
         read -rp ""
     fi
 
-    if restore_bot_backup "$temp_restore_dir"; then
-        BOT_STATUS=0
-    else
-        local res=$?
-        if [[ "$res" == "2" ]]; then BOT_STATUS=2; else BOT_STATUS=1; fi
+    if [[ "$_restore_shm" == "true" ]]; then
+        echo ""
+        if restore_shm_backup "$temp_restore_dir"; then
+            SHM_STATUS=0
+        else
+            local shm_res=$?
+            if [[ "$shm_res" == "2" ]]; then SHM_STATUS=2; else SHM_STATUS=1; fi
+        fi
     fi
 
     rm -rf "$temp_restore_dir"
     sleep 2
-    
+
     REMNAWAVE_VERSION=$(get_remnawave_version)
     local telegram_msg
-    telegram_msg="💾 #restore_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_restore_done)*"$'\n'"🌊 *Remnawave:* ${REMNAWAVE_VERSION}"
+    telegram_msg="💾 #restore_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_restore_done)*"
 
-    if [[ "$PANEL_STATUS" == "0" && "$BOT_STATUS" == "0" ]]; then
-        telegram_msg+=$'\n'"✨ *$(t tg_panel_bot)*"
+    if [[ "$PANEL_STATUS" == "0" && "$SHM_STATUS" == "0" ]]; then
+        telegram_msg+=$'\n'"🌊 *Remnawave:* ${REMNAWAVE_VERSION}"$'\n'"🖥️ *SHM*"
     elif [[ "$PANEL_STATUS" == "0" ]]; then
-        telegram_msg+=$'\n'"📦 *$(t tg_only_panel)*"
-    elif [[ "$BOT_STATUS" == "0" ]]; then
-        telegram_msg+=$'\n'"🤖 *$(t tg_only_bot)*"
+        telegram_msg+=$'\n'"🌊 *Remnawave:* ${REMNAWAVE_VERSION}"
+    elif [[ "$SHM_STATUS" == "0" ]]; then
+        telegram_msg+=$'\n'"🖥️ *SHM*"
     else
         telegram_msg+=$'\n'"⚠️ *$(t tg_nothing)*"
     fi
@@ -2370,35 +2159,6 @@ update_script() {
     print_message "INFO" "$(t upd_current) ${BOLD}${YELLOW}${VERSION}${RESET}"
     print_message "INFO" "$(t upd_available) ${BOLD}${GREEN}${REMOTE_VERSION}${RESET}"
     echo ""
-
-    compare_versions() {
-        local v1="$1"
-        local v2="$2"
-
-        local v1_num="${v1//[^0-9.]/}"
-        local v2_num="${v2//[^0-9.]/}"
-
-        local v1_sfx="${v1//$v1_num/}"
-        local v2_sfx="${v2//$v2_num/}"
-
-        if [[ "$v1_num" == "$v2_num" ]]; then
-            if [[ -z "$v1_sfx" && -n "$v2_sfx" ]]; then
-                return 0
-            elif [[ -n "$v1_sfx" && -z "$v2_sfx" ]]; then
-                return 1
-            elif [[ "$v1_sfx" < "$v2_sfx" ]]; then
-                return 0
-            else
-                return 1
-            fi
-        else
-            if printf '%s\n' "$v1_num" "$v2_num" | sort -V | head -n1 | grep -qx "$v1_num"; then
-                return 0
-            else
-                return 1
-            fi
-        fi
-    }
 
     if compare_versions "$VERSION" "$REMOTE_VERSION"; then
         print_message "ACTION" "$(t upd_new_avail) ${BOLD}${REMOTE_VERSION}${RESET}."
@@ -2672,6 +2432,344 @@ configure_upload_method() {
     echo ""
 }
 
+restore_shm_backup() {
+    local temp_restore_dir="$1"
+
+    local SHM_DUMP_FILE
+    SHM_DUMP_FILE=$(find "$temp_restore_dir" -name "shm_dump_*.sql.gz" | head -n 1)
+    local SHM_DIR_ARCHIVE
+    SHM_DIR_ARCHIVE=$(find "$temp_restore_dir" -name "shm_dir_*.tar.gz" | head -n 1)
+
+    if [[ -z "$SHM_DUMP_FILE" && -z "$SHM_DIR_ARCHIVE" ]]; then
+        print_message "INFO" "$(t rs_shm_missing)"
+        return 2
+    fi
+
+    print_message "WARN" "$(t rs_shm_found)"
+    read -rp "$(echo -e "${GREEN}[?]${RESET} $(t rs_shm_q) (${GREEN}Y${RESET}/${RED}N${RESET}): ")" confirm_shm
+    echo ""
+    if [[ ! "$confirm_shm" =~ ^[Yy]$ ]]; then
+        print_message "INFO" "$(t rs_shm_cancelled)"
+        return 1
+    fi
+
+    local shm_restore_path="${SHM_ROOT_DIR}"
+    if [[ -z "$shm_restore_path" ]]; then
+        print_message "ACTION" "$(t rs_shm_path_q)"
+        echo " 1. /opt/shm"
+        echo " 2. /root/shm"
+        echo " 3. /opt/stacks/shm"
+        echo " 4. $(t custom_path)"
+        echo ""
+        local shm_path_choice
+        while true; do
+            read -rp " ${GREEN}[?]${RESET} $(t select_variant)" shm_path_choice
+            case "$shm_path_choice" in
+            1) shm_restore_path="/opt/shm"; break ;;
+            2) shm_restore_path="/root/shm"; break ;;
+            3) shm_restore_path="/opt/stacks/shm"; break ;;
+            4)
+                echo ""
+                print_message "INFO" "$(t cfg_enter_shm_path)"
+                read -rp " $(t path_prompt)" custom_shm_restore
+                if [[ -n "$custom_shm_restore" ]]; then
+                    shm_restore_path="${custom_shm_restore%/}"
+                    break
+                fi
+                ;;
+            *) print_message "ERROR" "$(t invalid_input)" ;;
+            esac
+        done
+    fi
+
+    print_message "INFO" "$(t rs_shm_starting)"
+
+    if [[ -d "$shm_restore_path" ]]; then
+        if cd "$shm_restore_path" 2>/dev/null && ([[ -f "docker-compose.yml" ]] || [[ -f "docker-compose.yaml" ]] || [[ -f "compose.yml" ]] || [[ -f "compose.yaml" ]]); then
+            print_message "INFO" "$(t rs_shm_stopping)"
+            docker compose down 2>/dev/null || print_message "WARN" "$(t rs_shm_stop_fail)"
+        fi
+        cd /
+        rm -rf "$shm_restore_path"
+    fi
+
+    mkdir -p "$shm_restore_path"
+
+    if [[ -n "$SHM_DIR_ARCHIVE" ]]; then
+        print_message "INFO" "$(t rs_shm_unpack_dir)"
+        local shm_extract_dir="$BACKUP_DIR/shm_extract_temp_$$"
+        mkdir -p "$shm_extract_dir"
+
+        if tar -xzf "$SHM_DIR_ARCHIVE" -C "$shm_extract_dir"; then
+            local extracted_dir
+            extracted_dir=$(find "$shm_extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+            if [[ -n "$extracted_dir" ]]; then
+                cp -rf "$extracted_dir"/. "$shm_restore_path/"
+                rm -rf "$shm_extract_dir"
+                print_message "SUCCESS" "$(t rs_shm_dir_ok)"
+            else
+                rm -rf "$shm_extract_dir"
+                print_message "ERROR" "$(t rs_shm_dir_err)"
+                return 1
+            fi
+        else
+            rm -rf "$shm_extract_dir"
+            print_message "ERROR" "$(t rs_shm_dir_err)"
+            return 1
+        fi
+    fi
+
+    if [[ -n "$SHM_DUMP_FILE" ]]; then
+        if cd "$shm_restore_path" 2>/dev/null && ([[ -f "docker-compose.yml" ]] || [[ -f "docker-compose.yaml" ]] || [[ -f "compose.yml" ]] || [[ -f "compose.yaml" ]]); then
+            print_message "INFO" "$(t rs_shm_start_all)"
+            if ! docker compose up -d 2>/dev/null; then
+                print_message "ERROR" "$(t rs_shm_start_fail)"
+                return 1
+            fi
+            sleep 5
+        fi
+        cd /
+
+        local shm_mysql_container
+        shm_mysql_container=$(docker ps --format '{{.Names}}' | grep -iE 'shm.*(db|mysql|mariadb)|(db|mysql|mariadb).*shm' | head -n 1)
+
+        if [[ -z "$shm_mysql_container" ]]; then
+            print_message "ERROR" "$(t rs_shm_db_not_found)"
+            return 1
+        fi
+
+        print_message "INFO" "$(t rs_shm_restoring_db)"
+        local dump_uncompressed="${SHM_DUMP_FILE%.gz}"
+
+        if gunzip -f "$SHM_DUMP_FILE" 2>/dev/null && docker exec -i "$shm_mysql_container" mysql -u root < "$dump_uncompressed" 2>/dev/null; then
+            print_message "SUCCESS" "$(t rs_shm_db_ok)"
+        else
+            print_message "ERROR" "$(t rs_shm_dump_err)"
+            return 1
+        fi
+    fi
+
+    print_message "SUCCESS" "$(t rs_shm_ok)"
+    return 0
+}
+
+configure_source_remnawave() {
+    while true; do
+        clear
+        echo -e "${GREEN}${BOLD}$(t src_rw_title)${RESET}"
+        echo ""
+
+        local rw_status
+        if [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+            rw_status="${GREEN}$(t src_enabled)${RESET}"
+        else
+            rw_status="${RED}$(t src_disabled)${RESET}"
+        fi
+        print_message "INFO" "$(t src_enabled)/$(t src_disabled): ${rw_status}"
+        print_message "INFO" "$(t src_rw_current_path) ${BOLD}${REMNALABS_ROOT_DIR:-$(t not_set)}${RESET}"
+        print_message "INFO" "$(t src_rw_current_db_user) ${BOLD}${DB_USER:-$(t not_set)}${RESET}"
+        echo ""
+
+        if [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+            echo "   1. $(t src_rw_disable)"
+        else
+            echo "   1. $(t src_rw_enable)"
+        fi
+        echo "   2. $(t src_rw_change_path)"
+        echo "   3. $(t src_rw_change_db_user)"
+        echo ""
+        echo "   0. $(t back)"
+        echo ""
+
+        read -rp "${GREEN}[?]${RESET} $(t select_option)" choice
+        echo ""
+        case $choice in
+            1)
+                if [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+                    REMNAWAVE_ENABLED="false"
+                else
+                    REMNAWAVE_ENABLED="true"
+                fi
+                save_config
+                print_message "SUCCESS" "$(t config_saved)"
+                read -rp "$(t press_enter)"
+                ;;
+            2)
+                print_message "ACTION" "$(t cfg_where_panel)"
+                echo " 1. /opt/remnawave"
+                echo " 2. /root/remnawave"
+                echo " 3. /opt/stacks/remnawave"
+                echo " 4. $(t custom_path)"
+                echo ""
+                local path_choice
+                while true; do
+                    read -rp " ${GREEN}[?]${RESET} $(t select_variant)" path_choice
+                    case "$path_choice" in
+                    1) REMNALABS_ROOT_DIR="/opt/remnawave"; break ;;
+                    2) REMNALABS_ROOT_DIR="/root/remnawave"; break ;;
+                    3) REMNALABS_ROOT_DIR="/opt/stacks/remnawave"; break ;;
+                    4)
+                        echo ""
+                        print_message "INFO" "$(t cfg_enter_panel_path)"
+                        read -rp " $(t path_prompt)" custom_path_input
+                        if [[ -z "$custom_path_input" ]]; then
+                            print_message "ERROR" "$(t cfg_path_empty)"; echo ""; read -rp "$(t press_enter)"; continue
+                        fi
+                        if [[ ! "$custom_path_input" = /* ]]; then
+                            print_message "ERROR" "$(t cfg_path_abs)"; echo ""; read -rp "$(t press_enter)"; continue
+                        fi
+                        custom_path_input="${custom_path_input%/}"
+                        if [[ ! -d "$custom_path_input" ]]; then
+                            print_message "WARN" "$(t cfg_dir_missing) ${BOLD}${custom_path_input}${RESET}"
+                            read -rp "$(echo -e "${GREEN}[?]${RESET} $(t cfg_continue_path) ${GREEN}${BOLD}Y${RESET}/${RED}${BOLD}N${RESET}: ")" _confirm
+                            if [[ "$_confirm" != "y" ]]; then echo ""; read -rp "$(t press_enter)"; continue; fi
+                        fi
+                        REMNALABS_ROOT_DIR="$custom_path_input"
+                        print_message "SUCCESS" "$(t cfg_custom_set) ${BOLD}${REMNALABS_ROOT_DIR}${RESET}"
+                        break
+                        ;;
+                    *) print_message "ERROR" "$(t invalid_input)" ;;
+                    esac
+                done
+                save_config
+                print_message "SUCCESS" "$(t config_saved)"
+                read -rp "$(t press_enter)"
+                ;;
+            3)
+                print_message "INFO" "$(t src_rw_db_user_prompt)"
+                read -rp "    $(t input_prompt)" input_db_user
+                DB_USER="${input_db_user:-postgres}"
+                save_config
+                print_message "SUCCESS" "$(t config_saved)"
+                read -rp "$(t press_enter)"
+                ;;
+            0) break ;;
+            *) print_message "ERROR" "$(t invalid_input)" ; sleep 1 ;;
+        esac
+    done
+}
+
+configure_source_shm() {
+    while true; do
+        clear
+        echo -e "${GREEN}${BOLD}$(t src_shm_title)${RESET}"
+        echo ""
+
+        local shm_status
+        if [[ "$SHM_ENABLED" == "true" ]]; then
+            shm_status="${GREEN}$(t src_enabled)${RESET}"
+        else
+            shm_status="${RED}$(t src_disabled)${RESET}"
+        fi
+        print_message "INFO" "$(t src_enabled)/$(t src_disabled): ${shm_status}"
+        print_message "INFO" "$(t src_shm_current_path) ${BOLD}${SHM_ROOT_DIR:-$(t not_set)}${RESET}"
+        echo ""
+
+        if [[ "$SHM_ENABLED" == "true" ]]; then
+            echo "   1. $(t src_shm_disable)"
+        else
+            echo "   1. $(t src_shm_enable)"
+        fi
+        echo "   2. $(t src_shm_change_path)"
+        echo ""
+        echo "   0. $(t back)"
+        echo ""
+
+        read -rp "${GREEN}[?]${RESET} $(t select_option)" choice
+        echo ""
+        case $choice in
+            1)
+                if [[ "$SHM_ENABLED" == "true" ]]; then
+                    SHM_ENABLED="false"
+                else
+                    SHM_ENABLED="true"
+                fi
+                save_config
+                print_message "SUCCESS" "$(t config_saved)"
+                read -rp "$(t press_enter)"
+                ;;
+            2)
+                print_message "ACTION" "$(t cfg_where_shm)"
+                echo " 1. /opt/shm"
+                echo " 2. /root/shm"
+                echo " 3. /opt/stacks/shm"
+                echo " 4. $(t custom_path)"
+                echo ""
+                local shm_path_choice
+                while true; do
+                    read -rp " ${GREEN}[?]${RESET} $(t select_variant)" shm_path_choice
+                    case "$shm_path_choice" in
+                    1) SHM_ROOT_DIR="/opt/shm"; break ;;
+                    2) SHM_ROOT_DIR="/root/shm"; break ;;
+                    3) SHM_ROOT_DIR="/opt/stacks/shm"; break ;;
+                    4)
+                        echo ""
+                        print_message "INFO" "$(t cfg_enter_shm_path)"
+                        read -rp " $(t path_prompt)" custom_shm_input
+                        if [[ -z "$custom_shm_input" ]]; then
+                            print_message "ERROR" "$(t cfg_path_empty)"; echo ""; read -rp "$(t press_enter)"; continue
+                        fi
+                        if [[ ! "$custom_shm_input" = /* ]]; then
+                            print_message "ERROR" "$(t cfg_path_abs)"; echo ""; read -rp "$(t press_enter)"; continue
+                        fi
+                        custom_shm_input="${custom_shm_input%/}"
+                        if [[ ! -d "$custom_shm_input" ]]; then
+                            print_message "WARN" "$(t cfg_dir_missing) ${BOLD}${custom_shm_input}${RESET}"
+                            read -rp "$(echo -e "${GREEN}[?]${RESET} $(t cfg_continue_path) ${GREEN}${BOLD}Y${RESET}/${RED}${BOLD}N${RESET}: ")" _confirm
+                            if [[ "$_confirm" != "y" ]]; then echo ""; read -rp "$(t press_enter)"; continue; fi
+                        fi
+                        SHM_ROOT_DIR="$custom_shm_input"
+                        print_message "SUCCESS" "$(t cfg_custom_set) ${BOLD}${SHM_ROOT_DIR}${RESET}"
+                        break
+                        ;;
+                    *) print_message "ERROR" "$(t invalid_input)" ;;
+                    esac
+                done
+                save_config
+                print_message "SUCCESS" "$(t config_saved)"
+                read -rp "$(t press_enter)"
+                ;;
+            0) break ;;
+            *) print_message "ERROR" "$(t invalid_input)" ; sleep 1 ;;
+        esac
+    done
+}
+
+configure_sources() {
+    while true; do
+        clear
+        echo -e "${GREEN}${BOLD}$(t src_title)${RESET}"
+        echo ""
+
+        local rw_status shm_status
+        if [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+            rw_status="${GREEN}$(t src_enabled)${RESET}"
+        else
+            rw_status="${RED}$(t src_disabled)${RESET}"
+        fi
+        if [[ "$SHM_ENABLED" == "true" ]]; then
+            shm_status="${GREEN}$(t src_enabled)${RESET}"
+        else
+            shm_status="${RED}$(t src_disabled)${RESET}"
+        fi
+
+        echo -e "   1. $(t src_remnawave) — ${rw_status}"
+        echo -e "   2. $(t src_shm) — ${shm_status}"
+        echo ""
+        echo "   0. $(t back_to_menu)"
+        echo ""
+
+        read -rp "${GREEN}[?]${RESET} $(t select_option)" choice
+        echo ""
+        case $choice in
+            1) configure_source_remnawave ;;
+            2) configure_source_shm ;;
+            0) break ;;
+            *) print_message "ERROR" "$(t invalid_input)" ; sleep 1 ;;
+        esac
+    done
+}
+
 configure_settings() {
     while true; do
         clear
@@ -2681,10 +2779,9 @@ configure_settings() {
         echo "   2. $(t st_gd_settings)"
         echo "   3. $(t st_s3_settings)"
         echo "   4. $(t st_db_settings)"
-        echo "   5. $(t st_path_settings)"
-        echo "   6. $(t st_retention_settings)"
-        echo "   7. $(t st_lang)"
-        echo "   8. $(t st_auto_update)"
+        echo "   5. $(t st_retention_settings)"
+        echo "   6. $(t st_lang)"
+        echo "   7. $(t st_auto_update)"
         echo ""
         echo "   0. $(t back_to_menu)"
         echo ""
@@ -3079,75 +3176,6 @@ configure_settings() {
 
             5)
                 clear
-                echo -e "${GREEN}${BOLD}$(t st_path_title)${RESET}"
-                echo ""
-                print_message "INFO" "$(t st_path_current) ${BOLD}${REMNALABS_ROOT_DIR}${RESET}"
-                echo ""
-                print_message "ACTION" "$(t st_path_select)"
-                echo " 1. /opt/remnawave"
-                echo " 2. /root/remnawave"
-                echo " 3. /opt/stacks/remnawave"
-                echo " 4. $(t custom_path)"
-                echo ""
-                echo " 0. $(t back)"
-                echo ""
-
-                local new_remnawave_path_choice
-                while true; do
-                    read -rp " ${GREEN}[?]${RESET} $(t select_variant)" new_remnawave_path_choice
-                    case "$new_remnawave_path_choice" in
-                    1) REMNALABS_ROOT_DIR="/opt/remnawave"; break ;;
-                    2) REMNALABS_ROOT_DIR="/root/remnawave"; break ;;
-                    3) REMNALABS_ROOT_DIR="/opt/stacks/remnawave"; break ;;
-                    4) 
-                        echo ""
-                        print_message "INFO" "$(t st_path_enter)"
-                        read -rp " $(t path_prompt)" new_custom_remnawave_path
-        
-                        if [[ -z "$new_custom_remnawave_path" ]]; then
-                            print_message "ERROR" "$(t cfg_path_empty)"
-                            echo ""
-                            read -rp "$(t press_enter)"
-                            continue
-                        fi
-        
-                        if [[ ! "$new_custom_remnawave_path" = /* ]]; then
-                            print_message "ERROR" "$(t cfg_path_abs)"
-                            echo ""
-                            read -rp "$(t press_enter)"
-                            continue
-                        fi
-        
-                        new_custom_remnawave_path="${new_custom_remnawave_path%/}"
-        
-                        if [[ ! -d "$new_custom_remnawave_path" ]]; then
-                            print_message "WARN" "$(t st_path_missing) ${BOLD}${new_custom_remnawave_path}${RESET}"
-                            read -rp "$(echo -e "${GREEN}[?]${RESET} $(t st_path_continue) ${GREEN}${BOLD}Y${RESET}/${RED}${BOLD}N${RESET}: ")" confirm_new_custom_path
-                            if [[ "$confirm_new_custom_path" != "y" ]]; then
-                                echo ""
-                                read -rp "$(t press_enter)"
-                                continue
-                            fi
-                        fi
-        
-                        REMNALABS_ROOT_DIR="$new_custom_remnawave_path"
-                        print_message "SUCCESS" "$(t st_path_set) ${BOLD}${REMNALABS_ROOT_DIR}${RESET}"
-                        break 
-                        ;;
-                    0) 
-                        return
-                        ;;
-                    *) print_message "ERROR" "$(t invalid_input)" ;;
-                    esac
-                done
-                save_config
-                print_message "SUCCESS" "$(t st_path_ok) ${BOLD}${REMNALABS_ROOT_DIR}${RESET}."
-                echo ""
-                read -rp "$(t press_enter)"
-                ;;
-
-            6)
-                clear
                 echo -e "${GREEN}${BOLD}$(t st_retention_title)${RESET}"
                 echo ""
                 print_message "INFO" "$(t st_retention_local) ${BOLD}${RETAIN_BACKUPS_DAYS}${RESET} $(t st_retention_days)"
@@ -3181,7 +3209,7 @@ configure_settings() {
                 read -rp "$(t press_enter)"
                 ;;
 
-            7)
+            6)
                 clear
                 echo -e "${GREEN}${BOLD}$(t st_lang)${RESET}"
                 echo ""
@@ -3194,7 +3222,7 @@ configure_settings() {
                 read -rp "$(t press_enter)"
                 ;;
 
-            8)
+            7)
                 clear
                 echo -e "${GREEN}${BOLD}$(t st_auto_update)${RESET}"
                 echo ""
@@ -3255,36 +3283,7 @@ check_update_status() {
         return
     fi
 
-    compare_versions_for_check() {
-        local v1="$1"
-        local v2="$2"
-
-        local v1_num="${v1//[^0-9.]/}"
-        local v2_num="${v2//[^0-9.]/}"
-
-        local v1_sfx="${v1//$v1_num/}"
-        local v2_sfx="${v2//$v2_num/}"
-
-        if [[ "$v1_num" == "$v2_num" ]]; then
-            if [[ -z "$v1_sfx" && -n "$v2_sfx" ]]; then
-                return 0
-            elif [[ -n "$v1_sfx" && -z "$v2_sfx" ]]; then
-                return 1
-            elif [[ "$v1_sfx" < "$v2_sfx" ]]; then
-                return 0
-            else
-                return 1
-            fi
-        else
-            if printf '%s\n' "$v1_num" "$v2_num" | sort -V | head -n1 | grep -qx "$v1_num"; then
-                return 0
-            else
-                return 1
-            fi
-        fi
-    }
-
-    if compare_versions_for_check "$VERSION" "$REMOTE_VERSION"; then
+    if compare_versions "$VERSION" "$REMOTE_VERSION"; then
         UPDATE_AVAILABLE=true
     else
         UPDATE_AVAILABLE=false
@@ -3302,16 +3301,24 @@ main_menu() {
             echo -e "${BOLD}${LIGHT_GRAY}$(t menu_version) ${VERSION}${RESET}"
         fi
         
-        if [[ "$DB_CONNECTION_TYPE" == "external" ]]; then
-            echo -e "${LIGHT_GRAY}$(t menu_db_ext) (${DB_HOST}:${DB_PORT})${RESET}"
+        local _rw_badge _shm_badge
+        if [[ "$REMNAWAVE_ENABLED" == "true" ]]; then
+            _rw_badge="${GREEN}[$(t src_remnawave) ✓]${RESET}"
         else
-            echo -e "${LIGHT_GRAY}$(t menu_db_docker)${RESET}"
+            _rw_badge="${LIGHT_GRAY}[$(t src_remnawave) ✗]${RESET}"
         fi
+        if [[ "$SHM_ENABLED" == "true" ]]; then
+            _shm_badge="${GREEN}[$(t src_shm) ✓]${RESET}"
+        else
+            _shm_badge="${LIGHT_GRAY}[$(t src_shm) ✗]${RESET}"
+        fi
+        echo -e "${_rw_badge} ${_shm_badge}"
+
         echo ""
         echo "   1. $(t menu_create_backup)"
         echo "   2. $(t menu_restore)"
         echo ""
-        echo "   3. $(t menu_bot_backup)"
+        echo "   3. $(t menu_sources)"
         echo "   4. $(t menu_auto_send)"
         echo "   5. $(t menu_upload_method)"
         echo "   6. $(t menu_settings)"
@@ -3328,7 +3335,7 @@ main_menu() {
         case $choice in
             1) create_backup ; read -rp "$(t press_enter)" ;;
             2) restore_backup ;;
-            3) configure_bot_backup ;;
+            3) configure_sources ;;
             4) setup_auto_send ;;
             5) configure_upload_method ;;
             6) configure_settings ;;
