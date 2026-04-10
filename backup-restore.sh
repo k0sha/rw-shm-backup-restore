@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="3.3.1"
+VERSION="3.3.2"
 INSTALL_DIR="/opt/rw-backup-restore"
 BACKUP_DIR="$INSTALL_DIR/backup"
 CONFIG_FILE="$INSTALL_DIR/config.env"
@@ -827,7 +827,9 @@ send_telegram_message() {
         return 1
     fi
 
-    local url="https://api.telegram.org/bot$BOT_TOKEN/sendMessage"
+    local tg_base="${TG_PROXY:-https://api.telegram.org}"
+    tg_base="${tg_base%/}"
+    local url="${tg_base}/bot$BOT_TOKEN/sendMessage"
     local send_text="$message"
 
     if [[ "$parse_mode" == "MarkdownV2" ]]; then
@@ -846,14 +848,14 @@ send_telegram_message() {
     [[ -n "$TG_MESSAGE_THREAD_ID" ]] && data_params+=(-d message_thread_id="$TG_MESSAGE_THREAD_ID")
 
     local response
-    response=$(curl -s -X POST ${TG_PROXY:+--proxy "$TG_PROXY"} "$url" "${data_params[@]}" -w "\n%{http_code}")
+    response=$(curl -s --max-time 15 --connect-timeout 10 -X POST "$url" "${data_params[@]}" -w "\n%{http_code}")
     local body=$(echo "$response" | head -n -1)
     local http_code=$(echo "$response" | tail -n1)
 
     if [[ "$http_code" -eq 200 ]]; then
         return 0
     else
-        response=$(curl -s -X POST ${TG_PROXY:+--proxy "$TG_PROXY"} "$url" -d chat_id="$CHAT_ID" -d text="$message" -w "\n%{http_code}")
+        response=$(curl -s --max-time 15 --connect-timeout 10 -X POST "$url" -d chat_id="$CHAT_ID" -d text="$message" -w "\n%{http_code}")
         http_code=$(echo "$response" | tail -n1)
         if [[ "$http_code" -eq 200 ]]; then
             return 0
@@ -886,8 +888,11 @@ send_telegram_document() {
         form_params+=(-F message_thread_id="$TG_MESSAGE_THREAD_ID")
     fi
 
+    local tg_base="${TG_PROXY:-https://api.telegram.org}"
+    tg_base="${tg_base%/}"
+
     local api_response
-    api_response=$(curl -s -X POST ${TG_PROXY:+--proxy "$TG_PROXY"} "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
+    api_response=$(curl -s --max-time 60 --connect-timeout 10 -X POST "${tg_base}/bot$BOT_TOKEN/sendDocument" \
         "${form_params[@]}" \
         -w "%{http_code}" -o /dev/null 2>&1)
 
@@ -1128,6 +1133,7 @@ send_backup_file() {
                 print_message "SUCCESS" "$(t bk_tg_ok)"
             else
                 echo -e "${RED}❌ $(t bk_tg_err)${RESET}"
+                send_telegram_message "❌ $(t bk_tg_err)" "None"
             fi
         elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
             if send_google_drive_document "$final_file"; then
@@ -1430,7 +1436,9 @@ METAEOF
                             local release_url="https://github.com/k0sha/rw-shm-backup-restore/releases/tag/${REMOTE_VERSION_LATEST}"
                             local keyboard="{\"inline_keyboard\":[[{\"text\":\"$(t tg_auto_update_changelog)\",\"url\":\"${release_url}\"}]]}"
 
-                            curl -s -X POST ${TG_PROXY:+--proxy "$TG_PROXY"} "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                            local _tg_base="${TG_PROXY:-https://api.telegram.org}"
+                            _tg_base="${_tg_base%/}"
+                            curl -s -X POST "${_tg_base}/bot${BOT_TOKEN}/sendMessage" \
                                 -d "chat_id=${CHAT_ID}" \
                                 -d "text=${auto_update_msg}" \
                                 -d "parse_mode=Markdown" \
