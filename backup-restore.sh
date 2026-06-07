@@ -444,20 +444,20 @@ load_or_create_config() {
             echo ""
         fi
 
-        if [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
+        if method_enabled google_drive; then
             if [[ -z "$GD_CLIENT_ID" || -z "$GD_CLIENT_SECRET" || -z "$GD_REFRESH_TOKEN" ]]; then
                 print_message "WARN" "$(t cfg_gd_incomplete)"
                 print_message "WARN" "$(t cfg_gd_switch_tg)"
-                UPLOAD_METHOD="telegram"
+                remove_method google_drive
                 config_updated=true
             fi
         fi
 
-        if [[ "$UPLOAD_METHOD" == "s3" ]]; then
+        if method_enabled s3; then
             if [[ -z "$S3_BUCKET" || -z "$S3_ACCESS_KEY" || -z "$S3_SECRET_KEY" ]]; then
                 print_message "WARN" "$(t cfg_s3_incomplete)"
                 print_message "WARN" "$(t cfg_s3_switch_tg)"
-                UPLOAD_METHOD="telegram"
+                remove_method s3
                 config_updated=true
             fi
         fi
@@ -1106,6 +1106,32 @@ cleanup_s3_old_backups() {
     fi
 }
 
+# ── Upload method helpers (UPLOAD_METHOD is a space-separated list) ───────────
+method_enabled() {
+    local needle="$1"
+    local m
+    for m in $UPLOAD_METHOD; do
+        [[ "$m" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+add_method() {
+    local m="$1"
+    method_enabled "$m" && return 0
+    UPLOAD_METHOD="${UPLOAD_METHOD:+$UPLOAD_METHOD }$m"
+}
+
+remove_method() {
+    local m="$1"
+    local new="" x
+    for x in $UPLOAD_METHOD; do
+        [[ "$x" == "$m" ]] && continue
+        new="${new:+$new }$x"
+    done
+    UPLOAD_METHOD="$new"
+}
+
 send_backup_file() {
     local final_file="$1"
     local backup_info="$2"
@@ -1120,63 +1146,82 @@ send_backup_file() {
 
     local caption_text="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_success)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
 
-    if [[ -f "$final_file" ]]; then
-        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
-            local file_size_bytes
-            file_size_bytes=$(stat -c%s "$final_file" 2>/dev/null || stat -f%z "$final_file" 2>/dev/null || echo "0")
-            local max_tg_size=$((50 * 1024 * 1024))
-            if [[ "$file_size_bytes" -gt "$max_tg_size" ]]; then
-                print_message "ERROR" "$(printf "$(t bk_tg_big)" "$backup_size")"
-                print_message "INFO" "$(t bk_saved_local) ${BOLD}${final_file}${RESET}"
-                send_telegram_message "⚠️ $(printf "$(t bk_tg_big_notify)" "$backup_size")" "None" 2>/dev/null
-            elif send_telegram_document "$final_file" "$caption_text"; then
-                print_message "SUCCESS" "$(t bk_tg_ok)"
-            else
-                echo -e "${RED}❌ $(t bk_tg_err)${RESET}"
-                send_telegram_message "❌ $(t bk_tg_err)" "None"
-            fi
-        elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
-            if send_google_drive_document "$final_file"; then
-                print_message "SUCCESS" "$(t bk_gd_ok)"
-                local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_gd)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
-                if send_telegram_message "$tg_success_message"; then
-                    print_message "SUCCESS" "$(t bk_gd_notify_ok)"
-                else
-                    print_message "ERROR" "$(t bk_gd_notify_fail)"
-                fi
-            else
-                echo -e "${RED}❌ $(t bk_gd_err)${RESET}"
-                send_telegram_message "❌ $(t bk_gd_err_tg)" "None"
-            fi
-        elif [[ "$UPLOAD_METHOD" == "s3" ]]; then
-            if send_s3_document "$final_file"; then
-                print_message "SUCCESS" "$(t bk_s3_ok)"
-                local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_s3)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
-                if send_telegram_message "$tg_success_message"; then
-                    print_message "SUCCESS" "$(t bk_s3_notify_ok)"
-                else
-                    print_message "ERROR" "$(t bk_s3_notify_fail)"
-                fi
-            else
-                echo -e "${RED}❌ $(t bk_s3_err)${RESET}"
-                send_telegram_message "❌ $(t bk_s3_err_tg)" "None"
-            fi
-        else
-            print_message "WARN" "$(t bk_unknown_method) ${BOLD}${UPLOAD_METHOD}${RESET}. $(t bk_not_sent)"
-            send_telegram_message "❌ $(t bk_unknown_method) ${BOLD}${UPLOAD_METHOD}${RESET}" "None"
-        fi
-    else
+    if [[ ! -f "$final_file" ]]; then
         echo -e "${RED}❌ $(t bk_file_missing) ${BOLD}${final_file}${RESET}. $(t bk_impossible)${RESET}"
         local error_msg="❌ $(t bk_file_missing) ${BOLD}$(basename "$final_file")${RESET}"
-        if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+        if method_enabled telegram; then
             send_telegram_message "$error_msg" "None"
-        elif [[ "$UPLOAD_METHOD" == "google_drive" ]]; then
-            print_message "ERROR" "$(t bk_gd_impossible)"
-        elif [[ "$UPLOAD_METHOD" == "s3" ]]; then
-            print_message "ERROR" "$(t bk_s3_impossible)"
         fi
+        method_enabled google_drive && print_message "ERROR" "$(t bk_gd_impossible)"
+        method_enabled s3 && print_message "ERROR" "$(t bk_s3_impossible)"
         exit 1
     fi
+
+    # Backward compatibility / safety: default to telegram if nothing selected.
+    local _methods="$UPLOAD_METHOD"
+    [[ -z "${_methods// }" ]] && _methods="telegram"
+
+    # Whether Telegram is among the targets (it sends the document itself, so
+    # the other methods skip their own redundant TG success notification).
+    local tg_in_list="false"
+    method_enabled telegram && tg_in_list="true"
+
+    local method
+    for method in $_methods; do
+        case "$method" in
+            telegram)
+                local file_size_bytes
+                file_size_bytes=$(stat -c%s "$final_file" 2>/dev/null || stat -f%z "$final_file" 2>/dev/null || echo "0")
+                local max_tg_size=$((50 * 1024 * 1024))
+                if [[ "$file_size_bytes" -gt "$max_tg_size" ]]; then
+                    print_message "ERROR" "$(printf "$(t bk_tg_big)" "$backup_size")"
+                    print_message "INFO" "$(t bk_saved_local) ${BOLD}${final_file}${RESET}"
+                    send_telegram_message "⚠️ $(printf "$(t bk_tg_big_notify)" "$backup_size")" "None" 2>/dev/null
+                elif send_telegram_document "$final_file" "$caption_text"; then
+                    print_message "SUCCESS" "$(t bk_tg_ok)"
+                else
+                    echo -e "${RED}❌ $(t bk_tg_err)${RESET}"
+                    send_telegram_message "❌ $(t bk_tg_err)" "None"
+                fi
+                ;;
+            google_drive)
+                if send_google_drive_document "$final_file"; then
+                    print_message "SUCCESS" "$(t bk_gd_ok)"
+                    if [[ "$tg_in_list" != "true" ]]; then
+                        local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_gd)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
+                        if send_telegram_message "$tg_success_message"; then
+                            print_message "SUCCESS" "$(t bk_gd_notify_ok)"
+                        else
+                            print_message "ERROR" "$(t bk_gd_notify_fail)"
+                        fi
+                    fi
+                else
+                    echo -e "${RED}❌ $(t bk_gd_err)${RESET}"
+                    send_telegram_message "❌ $(t bk_gd_err_tg)" "None"
+                fi
+                ;;
+            s3)
+                if send_s3_document "$final_file"; then
+                    print_message "SUCCESS" "$(t bk_s3_ok)"
+                    if [[ "$tg_in_list" != "true" ]]; then
+                        local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_s3)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
+                        if send_telegram_message "$tg_success_message"; then
+                            print_message "SUCCESS" "$(t bk_s3_notify_ok)"
+                        else
+                            print_message "ERROR" "$(t bk_s3_notify_fail)"
+                        fi
+                    fi
+                else
+                    echo -e "${RED}❌ $(t bk_s3_err)${RESET}"
+                    send_telegram_message "❌ $(t bk_s3_err_tg)" "None"
+                fi
+                ;;
+            *)
+                print_message "WARN" "$(t bk_unknown_method) ${BOLD}${method}${RESET}. $(t bk_not_sent)"
+                send_telegram_message "❌ $(t bk_unknown_method) ${BOLD}${method}${RESET}" "None"
+                ;;
+        esac
+    done
 }
 
 create_backup() {
@@ -1245,7 +1290,7 @@ create_backup() {
             if [[ -n "$LAST_DB_ERROR" ]]; then
                 error_msg+="${LAST_DB_ERROR}"
             fi
-            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+            if method_enabled telegram; then
                 send_telegram_message "$error_msg" "None"
             fi
             exit $STATUS
@@ -1272,7 +1317,7 @@ create_backup() {
                 STATUS=$?
                 echo -e "${RED}❌ $(t bk_arch_err) ${BOLD}$STATUS${RESET}.${RESET}"
                 local error_msg="❌ $(t bk_arch_err) ${BOLD}${STATUS}${RESET}"
-                if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+                if method_enabled telegram; then
                     send_telegram_message "$error_msg" "None"
                 fi
                 exit $STATUS
@@ -1313,7 +1358,7 @@ METAEOF
         if ! tar -czf "$BACKUP_DIR/$BACKUP_FILE_FINAL" -C "$BACKUP_DIR" "${BACKUP_ITEMS[@]}"; then
             local _rw_tar_status=$?
             echo -e "${RED}❌ $(t bk_final_err) ${BOLD}${_rw_tar_status}${RESET}.${RESET}"
-            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+            if method_enabled telegram; then
                 send_telegram_message "❌ $(t bk_final_err) ${BOLD}${_rw_tar_status}${RESET}" "None"
             fi
             exit $_rw_tar_status
@@ -1352,7 +1397,7 @@ METAEOF
 
         if ! create_shm_backup; then
             print_message "ERROR" "$(t shm_backup_failed)"
-            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+            if method_enabled telegram; then
                 send_telegram_message "❌ $(t shm_backup_failed)" "None"
             fi
             exit 1
@@ -1373,7 +1418,7 @@ METAEOF
         if ! tar -czf "$BACKUP_DIR/$SHM_BACKUP_FILE_FINAL" -C "$BACKUP_DIR" "${BACKUP_ITEMS[@]}"; then
             local _shm_tar_status=$?
             echo -e "${RED}❌ $(t bk_final_err) ${BOLD}${_shm_tar_status}${RESET}.${RESET}"
-            if [[ "$UPLOAD_METHOD" == "telegram" ]]; then
+            if method_enabled telegram; then
                 send_telegram_message "❌ $(t bk_final_err) ${BOLD}${_shm_tar_status}${RESET}" "None"
             fi
             exit $_shm_tar_status
@@ -1400,7 +1445,7 @@ METAEOF
         echo ""
     fi
 
-    if [[ "$UPLOAD_METHOD" == "s3" ]]; then
+    if method_enabled s3; then
         print_message "INFO" "$(printf "$(t bk_s3_retention)" "$S3_RETAIN_DAYS")"
         cleanup_s3_old_backups
         print_message "SUCCESS" "$(t bk_s3_retention_ok)"
@@ -2282,11 +2327,24 @@ configure_upload_method() {
         clear
         echo -e "${GREEN}${BOLD}$(t ul_title)${RESET}"
         echo ""
-        print_message "INFO" "$(t ul_current) ${BOLD}${UPLOAD_METHOD^^}${RESET}"
+        print_message "INFO" "$(t ul_multi_hint)"
         echo ""
-        echo "   1. $(t ul_set_tg)"
-        echo "   2. $(t ul_set_gd)"
-        echo "   3. $(t ul_set_s3)"
+
+        local _tg_m _gd_m _s3_m
+        method_enabled telegram     && _tg_m="${GREEN}✓${RESET}" || _tg_m="${LIGHT_GRAY}✗${RESET}"
+        method_enabled google_drive && _gd_m="${GREEN}✓${RESET}" || _gd_m="${LIGHT_GRAY}✗${RESET}"
+        method_enabled s3           && _s3_m="${GREEN}✓${RESET}" || _s3_m="${LIGHT_GRAY}✗${RESET}"
+
+        local _active="${UPLOAD_METHOD//  / }"
+        if [[ -z "${_active// }" ]]; then
+            print_message "WARN" "$(t ul_active) ${BOLD}$(t ul_none_short)${RESET}"
+        else
+            print_message "INFO" "$(t ul_active) ${BOLD}${_active^^}${RESET}"
+        fi
+        echo ""
+        echo -e "   1. [${_tg_m}] $(t ul_opt_tg)"
+        echo -e "   2. [${_gd_m}] $(t ul_opt_gd)"
+        echo -e "   3. [${_s3_m}] $(t ul_opt_s3)"
         echo ""
         echo "   0. $(t back_to_menu)"
         echo ""
@@ -2295,132 +2353,144 @@ configure_upload_method() {
 
         case $choice in
             1)
-                UPLOAD_METHOD="telegram"
-                save_config
-                print_message "SUCCESS" "$(t ul_tg_set)"
-                if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
-                    print_message "ACTION" "$(t ul_tg_enter)"
-                    echo ""
-                    print_message "INFO" "$(t cfg_create_bot) ${CYAN}@BotFather${RESET}"
-                    read -rp "   $(t ul_enter_token)" BOT_TOKEN
-                    echo ""
-                    print_message "INFO" "$(t ul_tg_id_help) ${CYAN}@userinfobot${RESET}"
-                    read -rp "   $(t ul_enter_tg_id)" CHAT_ID
+                if method_enabled telegram; then
+                    remove_method telegram
                     save_config
-                    print_message "SUCCESS" "$(t ul_tg_saved)"
+                    print_message "SUCCESS" "$(t ul_tg_off)"
+                else
+                    if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+                        print_message "ACTION" "$(t ul_tg_enter)"
+                        echo ""
+                        print_message "INFO" "$(t cfg_create_bot) ${CYAN}@BotFather${RESET}"
+                        read -rp "   $(t ul_enter_token)" BOT_TOKEN
+                        echo ""
+                        print_message "INFO" "$(t ul_tg_id_help) ${CYAN}@userinfobot${RESET}"
+                        read -rp "   $(t ul_enter_tg_id)" CHAT_ID
+                    fi
+                    if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" ]]; then
+                        print_message "ERROR" "$(t ul_tg_fail)"
+                    else
+                        add_method telegram
+                        save_config
+                        print_message "SUCCESS" "$(t ul_tg_saved)"
+                    fi
                 fi
                 ;;
             2)
-                UPLOAD_METHOD="google_drive"
-                print_message "SUCCESS" "$(t ul_gd_set)"
-                
-                local gd_setup_successful=true
+                if method_enabled google_drive; then
+                    remove_method google_drive
+                    save_config
+                    print_message "SUCCESS" "$(t ul_gd_off)"
+                else
+                    local gd_setup_successful=true
 
-                if [[ -z "$GD_CLIENT_ID" || -z "$GD_CLIENT_SECRET" || -z "$GD_REFRESH_TOKEN" ]]; then
-                    print_message "ACTION" "$(t ul_gd_enter)"
-                    echo ""
-                    echo "$(t st_gd_no_tokens)"
-                    local guide_url="https://telegra.ph/Nastrojka-Google-API-06-02"
-                    print_message "LINK" "$(t cfg_gd_guide) ${CYAN}${guide_url}${RESET}"
-                    read -rp "   $(t cfg_enter_gd_id)" GD_CLIENT_ID
-                    read -rp "   $(t cfg_enter_gd_secret)" GD_CLIENT_SECRET
-                    
-                    clear
-                    
-                    print_message "WARN" "$(t cfg_gd_auth_needed)"
-                    print_message "INFO" "$(t cfg_gd_open_url)"
-                    echo ""
-                    local auth_url="https://accounts.google.com/o/oauth2/auth?client_id=${GD_CLIENT_ID}&redirect_uri=urn:ietf:wg:oauth:2.0:oob&scope=https://www.googleapis.com/auth/drive&response_type=code&access_type=offline"
-                    print_message "INFO" "${CYAN}${auth_url}${RESET}"
-                    echo ""
-                    read -rp "$(t cfg_gd_enter_code)" AUTH_CODE
-                    
-                    print_message "INFO" "$(t cfg_gd_getting)"
-                    local token_response=$(curl -s -X POST https://oauth2.googleapis.com/token \
-                        -d client_id="$GD_CLIENT_ID" \
-                        -d client_secret="$GD_CLIENT_SECRET" \
-                        -d code="$AUTH_CODE" \
-                        -d redirect_uri="urn:ietf:wg:oauth:2.0:oob" \
-                        -d grant_type="authorization_code")
-                    
-                    GD_REFRESH_TOKEN=$(echo "$token_response" | jq -r .refresh_token 2>/dev/null)
-                    
-                    if [[ -z "$GD_REFRESH_TOKEN" || "$GD_REFRESH_TOKEN" == "null" ]]; then
-                        print_message "ERROR" "$(t ul_gd_fail)"
-                        print_message "WARN" "$(t ul_gd_not_done)"
-                        UPLOAD_METHOD="telegram"
-                        gd_setup_successful=false
-                    else
-                        print_message "SUCCESS" "$(t ul_gd_token_ok)"
-                    fi
-                    echo
-                    
-                    if $gd_setup_successful; then
-                        echo "   $(t cfg_gd_folder1)"
-                        echo "   $(t cfg_gd_folder2)"
-                        echo "   $(t cfg_gd_folder3)"
-                        echo "      https://drive.google.com/drive/folders/1a2B3cD4eFmNOPqRstuVwxYz"
-                        echo "   $(t cfg_gd_folder4)"
-                        echo "   $(t cfg_gd_folder5)"
+                    if [[ -z "$GD_CLIENT_ID" || -z "$GD_CLIENT_SECRET" || -z "$GD_REFRESH_TOKEN" ]]; then
+                        print_message "ACTION" "$(t ul_gd_enter)"
+                        echo ""
+                        echo "$(t st_gd_no_tokens)"
+                        local guide_url="https://telegra.ph/Nastrojka-Google-API-06-02"
+                        print_message "LINK" "$(t cfg_gd_guide) ${CYAN}${guide_url}${RESET}"
+                        read -rp "   $(t cfg_enter_gd_id)" GD_CLIENT_ID
+                        read -rp "   $(t cfg_enter_gd_secret)" GD_CLIENT_SECRET
+
+                        clear
+
+                        print_message "WARN" "$(t cfg_gd_auth_needed)"
+                        print_message "INFO" "$(t cfg_gd_open_url)"
+                        echo ""
+                        local auth_url="https://accounts.google.com/o/oauth2/auth?client_id=${GD_CLIENT_ID}&redirect_uri=urn:ietf:wg:oauth:2.0:oob&scope=https://www.googleapis.com/auth/drive&response_type=code&access_type=offline"
+                        print_message "INFO" "${CYAN}${auth_url}${RESET}"
+                        echo ""
+                        read -rp "$(t cfg_gd_enter_code)" AUTH_CODE
+
+                        print_message "INFO" "$(t cfg_gd_getting)"
+                        local token_response=$(curl -s -X POST https://oauth2.googleapis.com/token \
+                            -d client_id="$GD_CLIENT_ID" \
+                            -d client_secret="$GD_CLIENT_SECRET" \
+                            -d code="$AUTH_CODE" \
+                            -d redirect_uri="urn:ietf:wg:oauth:2.0:oob" \
+                            -d grant_type="authorization_code")
+
+                        GD_REFRESH_TOKEN=$(echo "$token_response" | jq -r .refresh_token 2>/dev/null)
+
+                        if [[ -z "$GD_REFRESH_TOKEN" || "$GD_REFRESH_TOKEN" == "null" ]]; then
+                            print_message "ERROR" "$(t ul_gd_fail)"
+                            gd_setup_successful=false
+                        else
+                            print_message "SUCCESS" "$(t ul_gd_token_ok)"
+                        fi
                         echo
 
-                        read -rp "   $(t cfg_enter_gd_folder)" GD_FOLDER_ID
+                        if $gd_setup_successful; then
+                            echo "   $(t cfg_gd_folder1)"
+                            echo "   $(t cfg_gd_folder2)"
+                            echo "   $(t cfg_gd_folder3)"
+                            echo "      https://drive.google.com/drive/folders/1a2B3cD4eFmNOPqRstuVwxYz"
+                            echo "   $(t cfg_gd_folder4)"
+                            echo "   $(t cfg_gd_folder5)"
+                            echo
+
+                            read -rp "   $(t cfg_enter_gd_folder)" GD_FOLDER_ID
+                        fi
                     fi
-                fi
 
-                save_config
-
-                if $gd_setup_successful; then
-                    print_message "SUCCESS" "$(t ul_gd_saved)"
-                else
-                    print_message "SUCCESS" "$(t ul_tg_set)"
+                    if $gd_setup_successful; then
+                        add_method google_drive
+                        save_config
+                        print_message "SUCCESS" "$(t ul_gd_saved)"
+                    else
+                        save_config
+                        print_message "WARN" "$(t ul_gd_not_added)"
+                    fi
                 fi
                 ;;
             3)
-                if ! install_aws_cli; then
-                    print_message "WARN" "$(t ul_s3_aws_needed)"
-                    echo ""
-                    read -rp "$(t press_enter)"
-                    continue
-                fi
-                
-                UPLOAD_METHOD="s3"
-                print_message "SUCCESS" "$(t ul_s3_set)"
-                
-                local s3_setup_successful=true
-
-                if [[ -z "$S3_BUCKET" || -z "$S3_ACCESS_KEY" || -z "$S3_SECRET_KEY" ]]; then
-                    print_message "ACTION" "$(t ul_s3_enter)"
-                    echo ""
-                    read -rp "   $(t ul_s3_enter_endpoint)" S3_ENDPOINT
-                    read -rp "   $(t ul_s3_enter_region)" S3_REGION
-                    S3_REGION="${S3_REGION:-us-east-1}"
-                    read -rp "   $(t ul_s3_enter_bucket)" S3_BUCKET
-                    read -rp "   $(t ul_s3_enter_access)" S3_ACCESS_KEY
-                    read -rp "   $(t ul_s3_enter_secret)" S3_SECRET_KEY
-                    echo ""
-                    echo "   $(t ul_s3_prefix_info1)"
-                    echo "   $(t ul_s3_prefix_info2)"
-                    read -rp "   $(t ul_s3_enter_prefix)" S3_PREFIX
-                    echo ""
-                    print_message "INFO" "$(t ul_s3_retain_info)"
-                    read -rp "   $(printf "$(t ul_s3_enter_retain)" "$S3_RETAIN_DAYS")" input_s3_retain
-                    S3_RETAIN_DAYS="${input_s3_retain:-$S3_RETAIN_DAYS}"
-                    
-                    if [[ -z "$S3_ACCESS_KEY" || -z "$S3_SECRET_KEY" || -z "$S3_BUCKET" ]]; then
-                        print_message "ERROR" "$(t ul_s3_fail)"
-                        print_message "WARN" "$(t ul_s3_not_done)"
-                        UPLOAD_METHOD="telegram"
-                        s3_setup_successful=false
-                    fi
-                fi
-
-                save_config
-
-                if $s3_setup_successful; then
-                    print_message "SUCCESS" "$(t ul_s3_saved)"
+                if method_enabled s3; then
+                    remove_method s3
+                    save_config
+                    print_message "SUCCESS" "$(t ul_s3_off)"
                 else
-                    print_message "SUCCESS" "$(t ul_tg_set)"
+                    if ! install_aws_cli; then
+                        print_message "WARN" "$(t ul_s3_aws_needed)"
+                        echo ""
+                        read -rp "$(t press_enter)"
+                        continue
+                    fi
+
+                    local s3_setup_successful=true
+
+                    if [[ -z "$S3_BUCKET" || -z "$S3_ACCESS_KEY" || -z "$S3_SECRET_KEY" ]]; then
+                        print_message "ACTION" "$(t ul_s3_enter)"
+                        echo ""
+                        read -rp "   $(t ul_s3_enter_endpoint)" S3_ENDPOINT
+                        read -rp "   $(t ul_s3_enter_region)" S3_REGION
+                        S3_REGION="${S3_REGION:-us-east-1}"
+                        read -rp "   $(t ul_s3_enter_bucket)" S3_BUCKET
+                        read -rp "   $(t ul_s3_enter_access)" S3_ACCESS_KEY
+                        read -rp "   $(t ul_s3_enter_secret)" S3_SECRET_KEY
+                        echo ""
+                        echo "   $(t ul_s3_prefix_info1)"
+                        echo "   $(t ul_s3_prefix_info2)"
+                        read -rp "   $(t ul_s3_enter_prefix)" S3_PREFIX
+                        echo ""
+                        print_message "INFO" "$(t ul_s3_retain_info)"
+                        read -rp "   $(printf "$(t ul_s3_enter_retain)" "$S3_RETAIN_DAYS")" input_s3_retain
+                        S3_RETAIN_DAYS="${input_s3_retain:-$S3_RETAIN_DAYS}"
+
+                        if [[ -z "$S3_ACCESS_KEY" || -z "$S3_SECRET_KEY" || -z "$S3_BUCKET" ]]; then
+                            print_message "ERROR" "$(t ul_s3_fail)"
+                            s3_setup_successful=false
+                        fi
+                    fi
+
+                    if $s3_setup_successful; then
+                        add_method s3
+                        save_config
+                        print_message "SUCCESS" "$(t ul_s3_saved)"
+                    else
+                        save_config
+                        print_message "WARN" "$(t ul_s3_not_added)"
+                    fi
                 fi
                 ;;
             0) break ;;
