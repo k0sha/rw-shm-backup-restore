@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="3.4.0"
+VERSION="3.4.1"
 INSTALL_DIR="/opt/rw-backup-restore"
 BACKUP_DIR="$INSTALL_DIR/backup"
 CONFIG_FILE="$INSTALL_DIR/config.env"
@@ -1156,7 +1156,10 @@ send_nas_document() {
     local target
     target="$(nas_target_url)"
 
-    if ! RSYNC_PASSWORD="$NAS_PASSWORD" rsync -a --timeout=120 "$file_path" "$target" 2>&1; then
+    # Do NOT preserve owner/group/perms: the Synology rsync daemon account is
+    # not allowed to chown/chgrp on the destination (causes "Operation not
+    # permitted" and a non-zero exit even though the file is copied fine).
+    if ! RSYNC_PASSWORD="$NAS_PASSWORD" rsync -t --no-owner --no-group --no-perms --timeout=120 "$file_path" "$target" 2>&1; then
         print_message "ERROR" "$(t nas_upload_err)"
         return 1
     fi
@@ -3003,6 +3006,7 @@ configure_settings() {
         echo "   5. $(t st_retention_settings)"
         echo "   6. $(t st_lang)"
         echo "   7. $(t st_auto_update)"
+        echo "   8. $(t st_nas_settings)"
         echo ""
         echo "   0. $(t back_to_menu)"
         echo ""
@@ -3476,6 +3480,91 @@ configure_settings() {
                 esac
                 echo ""
                 read -rp "$(t press_enter)"
+                ;;
+
+            8)
+                while true; do
+                    clear
+                    echo -e "${GREEN}${BOLD}$(t st_nas_title)${RESET}"
+                    echo ""
+                    print_message "INFO" "$(t st_nas_host) ${BOLD}${NAS_HOST:-$(t not_set)}${RESET}"
+                    print_message "INFO" "$(t st_nas_port) ${BOLD}${NAS_PORT:-873}${RESET}"
+                    print_message "INFO" "$(t st_nas_user) ${BOLD}${NAS_USER:-$(t not_set)}${RESET}"
+                    print_message "INFO" "$(t st_nas_pass) ${BOLD}${NAS_PASSWORD:+****}${RESET}"
+                    print_message "INFO" "$(t st_nas_module) ${BOLD}${NAS_MODULE:-$(t not_set)}${RESET}"
+                    print_message "INFO" "$(t st_nas_path) ${BOLD}${NAS_PATH:-$(t root_folder)}${RESET}"
+                    echo ""
+                    echo "   1. $(t st_nas_change_host)"
+                    echo "   2. $(t st_nas_change_port)"
+                    echo "   3. $(t st_nas_change_user)"
+                    echo "   4. $(t st_nas_change_pass)"
+                    echo "   5. $(t st_nas_change_module)"
+                    echo "   6. $(t st_nas_change_path)"
+                    echo "   7. $(t st_nas_test)"
+                    echo ""
+                    echo "   0. $(t back)"
+                    echo ""
+                    read -rp "${GREEN}[?]${RESET} $(t select_option)" nas_choice
+                    echo ""
+
+                    case $nas_choice in
+                        1)
+                            read -rp "   $(t ul_nas_enter_host)" NEW_NAS_HOST
+                            NAS_HOST="$NEW_NAS_HOST"
+                            save_config
+                            print_message "SUCCESS" "$(t st_nas_saved)"
+                            ;;
+                        2)
+                            read -rp "   $(printf "$(t ul_nas_enter_port)" "${NAS_PORT:-873}")" NEW_NAS_PORT
+                            NAS_PORT="${NEW_NAS_PORT:-${NAS_PORT:-873}}"
+                            save_config
+                            print_message "SUCCESS" "$(t st_nas_saved)"
+                            ;;
+                        3)
+                            read -rp "   $(t ul_nas_enter_user)" NEW_NAS_USER
+                            NAS_USER="$NEW_NAS_USER"
+                            save_config
+                            print_message "SUCCESS" "$(t st_nas_saved)"
+                            ;;
+                        4)
+                            read -rsp "   $(t ul_nas_enter_pass)" NEW_NAS_PASSWORD
+                            echo ""
+                            NAS_PASSWORD="$NEW_NAS_PASSWORD"
+                            save_config
+                            print_message "SUCCESS" "$(t st_nas_saved)"
+                            ;;
+                        5)
+                            echo "   $(t ul_nas_module_info)"
+                            read -rp "   $(t ul_nas_enter_module)" NEW_NAS_MODULE
+                            NAS_MODULE="$NEW_NAS_MODULE"
+                            save_config
+                            print_message "SUCCESS" "$(t st_nas_saved)"
+                            ;;
+                        6)
+                            echo "   $(t ul_nas_path_info)"
+                            read -rp "   $(t ul_nas_enter_path)" NEW_NAS_PATH
+                            NAS_PATH="$NEW_NAS_PATH"
+                            save_config
+                            print_message "SUCCESS" "$(t st_nas_saved)"
+                            ;;
+                        7)
+                            if [[ -z "$NAS_HOST" || -z "$NAS_USER" || -z "$NAS_MODULE" ]]; then
+                                print_message "ERROR" "$(t st_nas_test_missing)"
+                            else
+                                print_message "INFO" "$(t ul_nas_testing)"
+                                if send_nas_document_test; then
+                                    print_message "SUCCESS" "$(t st_nas_test_ok)"
+                                else
+                                    print_message "ERROR" "$(t ul_nas_test_fail)"
+                                fi
+                            fi
+                            ;;
+                        0) break ;;
+                        *) print_message "ERROR" "$(t invalid_input_select)" ;;
+                    esac
+                    echo ""
+                    read -rp "$(t press_enter)"
+                done
                 ;;
 
             0) break ;;
