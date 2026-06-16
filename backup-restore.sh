@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="3.3.4"
+VERSION="3.4.0"
 INSTALL_DIR="/opt/rw-backup-restore"
 BACKUP_DIR="$INSTALL_DIR/backup"
 CONFIG_FILE="$INSTALL_DIR/config.env"
@@ -24,6 +24,12 @@ S3_SECRET_KEY=""
 S3_BUCKET=""
 S3_REGION=""
 S3_PREFIX=""
+NAS_HOST=""
+NAS_PORT="873"
+NAS_USER=""
+NAS_MODULE=""
+NAS_PATH=""
+NAS_PASSWORD=""
 UPLOAD_METHOD="telegram"
 DB_CONNECTION_TYPE="docker"
 DB_HOST=""
@@ -265,6 +271,12 @@ S3_BUCKET="$S3_BUCKET"
 S3_REGION="$S3_REGION"
 S3_PREFIX="$S3_PREFIX"
 S3_RETAIN_DAYS="$S3_RETAIN_DAYS"
+NAS_HOST="$NAS_HOST"
+NAS_PORT="$NAS_PORT"
+NAS_USER="$NAS_USER"
+NAS_MODULE="$NAS_MODULE"
+NAS_PATH="$NAS_PATH"
+NAS_PASSWORD="$NAS_PASSWORD"
 RETAIN_BACKUPS_DAYS="$RETAIN_BACKUPS_DAYS"
 CRON_TIMES="$CRON_TIMES"
 REMNALABS_ROOT_DIR="$REMNALABS_ROOT_DIR"
@@ -316,6 +328,12 @@ load_or_create_config() {
         S3_REGION=${S3_REGION:-}
         S3_PREFIX=${S3_PREFIX:-}
         S3_RETAIN_DAYS=${S3_RETAIN_DAYS:-30}
+        NAS_HOST=${NAS_HOST:-}
+        NAS_PORT=${NAS_PORT:-873}
+        NAS_USER=${NAS_USER:-}
+        NAS_MODULE=${NAS_MODULE:-}
+        NAS_PATH=${NAS_PATH:-}
+        NAS_PASSWORD=${NAS_PASSWORD:-}
         RETAIN_BACKUPS_DAYS=${RETAIN_BACKUPS_DAYS:-7}
         LANG_CODE=${LANG_CODE:-}
         AUTO_UPDATE=${AUTO_UPDATE:-false}
@@ -458,6 +476,15 @@ load_or_create_config() {
                 print_message "WARN" "$(t cfg_s3_incomplete)"
                 print_message "WARN" "$(t cfg_s3_switch_tg)"
                 remove_method s3
+                config_updated=true
+            fi
+        fi
+
+        if method_enabled nas; then
+            if [[ -z "$NAS_HOST" || -z "$NAS_USER" || -z "$NAS_MODULE" ]]; then
+                print_message "WARN" "$(t cfg_nas_incomplete)"
+                print_message "WARN" "$(t cfg_nas_switch_tg)"
+                remove_method nas
                 config_updated=true
             fi
         fi
@@ -1106,6 +1133,49 @@ cleanup_s3_old_backups() {
     fi
 }
 
+# ── NAS (Synology rsync service / rsync daemon, port 873) helpers ─────────────
+# NOTE: rsync daemon transport is UNENCRYPTED. Use only on a trusted LAN or
+# inside a VPN. Remote retention is not possible over the daemon protocol, so
+# old backups must be pruned on the NAS side.
+nas_target_url() {
+    # Builds rsync://user@host:port/MODULE[/SUBPATH]/
+    local sub="${NAS_PATH#/}"; sub="${sub%/}"
+    local url="rsync://${NAS_USER}@${NAS_HOST}:${NAS_PORT:-873}/${NAS_MODULE}"
+    [[ -n "$sub" ]] && url="${url}/${sub}"
+    echo "${url}/"
+}
+
+send_nas_document() {
+    local file_path="$1"
+
+    if ! command -v rsync >/dev/null 2>&1; then
+        print_message "ERROR" "$(t nas_rsync_missing)"
+        return 1
+    fi
+
+    local target
+    target="$(nas_target_url)"
+
+    if ! RSYNC_PASSWORD="$NAS_PASSWORD" rsync -a --timeout=120 "$file_path" "$target" 2>&1; then
+        print_message "ERROR" "$(t nas_upload_err)"
+        return 1
+    fi
+    print_message "SUCCESS" "$(t nas_upload_ok)"
+    return 0
+}
+
+send_nas_document_test() {
+    command -v rsync >/dev/null 2>&1 || { print_message "ERROR" "$(t nas_rsync_missing)"; return 1; }
+
+    # Listing the target validates connectivity, auth and the module/path.
+    local target
+    target="$(nas_target_url)"
+    if RSYNC_PASSWORD="$NAS_PASSWORD" rsync --timeout=20 "$target" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 # ── Upload method helpers (UPLOAD_METHOD is a space-separated list) ───────────
 method_enabled() {
     local needle="$1"
@@ -1154,6 +1224,7 @@ send_backup_file() {
         fi
         method_enabled google_drive && print_message "ERROR" "$(t bk_gd_impossible)"
         method_enabled s3 && print_message "ERROR" "$(t bk_s3_impossible)"
+        method_enabled nas && print_message "ERROR" "$(t bk_nas_impossible)"
         exit 1
     fi
 
@@ -1214,6 +1285,22 @@ send_backup_file() {
                 else
                     echo -e "${RED}❌ $(t bk_s3_err)${RESET}"
                     send_telegram_message "❌ $(t bk_s3_err_tg)" "None"
+                fi
+                ;;
+            nas)
+                if send_nas_document "$final_file"; then
+                    print_message "SUCCESS" "$(t bk_nas_ok)"
+                    if [[ "$tg_in_list" != "true" ]]; then
+                        local tg_success_message="💾 #backup_success"$'\n'"➖➖➖➖➖➖➖➖➖"$'\n'"✅ *$(t tg_bk_nas)*${backup_info}${db_mode_info}"$'\n'"📁 *$(t tg_db_dir)*"$'\n'"📏 *$(t tg_size)* ${backup_size}"$'\n'"📅 *$(t tg_date)* ${DATE}"
+                        if send_telegram_message "$tg_success_message"; then
+                            print_message "SUCCESS" "$(t bk_nas_notify_ok)"
+                        else
+                            print_message "ERROR" "$(t bk_nas_notify_fail)"
+                        fi
+                    fi
+                else
+                    echo -e "${RED}❌ $(t bk_nas_err)${RESET}"
+                    send_telegram_message "❌ $(t bk_nas_err_tg)" "None"
                 fi
                 ;;
             *)
@@ -1450,7 +1537,7 @@ METAEOF
         cleanup_s3_old_backups
         print_message "SUCCESS" "$(t bk_s3_retention_ok)"
     fi
-    
+
     echo ""
     
     {
@@ -2330,10 +2417,11 @@ configure_upload_method() {
         print_message "INFO" "$(t ul_multi_hint)"
         echo ""
 
-        local _tg_m _gd_m _s3_m
+        local _tg_m _gd_m _s3_m _nas_m
         method_enabled telegram     && _tg_m="${GREEN}✓${RESET}" || _tg_m="${LIGHT_GRAY}✗${RESET}"
         method_enabled google_drive && _gd_m="${GREEN}✓${RESET}" || _gd_m="${LIGHT_GRAY}✗${RESET}"
         method_enabled s3           && _s3_m="${GREEN}✓${RESET}" || _s3_m="${LIGHT_GRAY}✗${RESET}"
+        method_enabled nas          && _nas_m="${GREEN}✓${RESET}" || _nas_m="${LIGHT_GRAY}✗${RESET}"
 
         local _active="${UPLOAD_METHOD//  / }"
         if [[ -z "${_active// }" ]]; then
@@ -2345,6 +2433,7 @@ configure_upload_method() {
         echo -e "   1. [${_tg_m}] $(t ul_opt_tg)"
         echo -e "   2. [${_gd_m}] $(t ul_opt_gd)"
         echo -e "   3. [${_s3_m}] $(t ul_opt_s3)"
+        echo -e "   4. [${_nas_m}] $(t ul_opt_nas)"
         echo ""
         echo "   0. $(t back_to_menu)"
         echo ""
@@ -2490,6 +2579,76 @@ configure_upload_method() {
                     else
                         save_config
                         print_message "WARN" "$(t ul_s3_not_added)"
+                    fi
+                fi
+                ;;
+            4)
+                if method_enabled nas; then
+                    remove_method nas
+                    save_config
+                    print_message "SUCCESS" "$(t ul_nas_off)"
+                else
+                    if ! command -v rsync >/dev/null 2>&1; then
+                        print_message "INFO" "$(t nas_installing_rsync)"
+                        if command -v apt-get >/dev/null 2>&1; then
+                            apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq rsync >/dev/null 2>&1
+                        elif command -v yum >/dev/null 2>&1; then
+                            yum install -y -q rsync >/dev/null 2>&1
+                        elif command -v apk >/dev/null 2>&1; then
+                            apk add --no-cache rsync >/dev/null 2>&1
+                        fi
+                    fi
+                    if ! command -v rsync >/dev/null 2>&1; then
+                        print_message "ERROR" "$(t nas_rsync_missing)"
+                        echo ""
+                        read -rp "$(t press_enter)"
+                        continue
+                    fi
+
+                    local nas_setup_successful=true
+
+                    print_message "ACTION" "$(t ul_nas_enter)"
+                    print_message "WARN" "$(t ul_nas_warn_plain)"
+                    echo ""
+                    read -rp "   $(t ul_nas_enter_host)" NAS_HOST
+                    read -rp "   $(printf "$(t ul_nas_enter_port)" "${NAS_PORT:-873}")" input_nas_port
+                    NAS_PORT="${input_nas_port:-${NAS_PORT:-873}}"
+                    read -rp "   $(t ul_nas_enter_user)" NAS_USER
+                    read -rsp "   $(t ul_nas_enter_pass)" NAS_PASSWORD
+                    echo ""
+                    echo ""
+                    echo "   $(t ul_nas_module_info)"
+                    read -rp "   $(t ul_nas_enter_module)" NAS_MODULE
+                    echo ""
+                    echo "   $(t ul_nas_path_info)"
+                    read -rp "   $(t ul_nas_enter_path)" NAS_PATH
+
+                    if [[ -z "$NAS_HOST" || -z "$NAS_USER" || -z "$NAS_MODULE" ]]; then
+                        print_message "ERROR" "$(t ul_nas_fail)"
+                        nas_setup_successful=false
+                    fi
+
+                    if $nas_setup_successful; then
+                        print_message "INFO" "$(t ul_nas_testing)"
+                        if send_nas_document_test; then
+                            add_method nas
+                            save_config
+                            print_message "SUCCESS" "$(t ul_nas_saved)"
+                        else
+                            print_message "WARN" "$(t ul_nas_test_fail)"
+                            read -rp "$(echo -e "   ${GREEN}[?]${RESET} $(t ul_nas_save_anyway) (${GREEN}Y${RESET}/${RED}N${RESET}): ")" nas_confirm
+                            if [[ "$nas_confirm" =~ ^[Yy]$ ]]; then
+                                add_method nas
+                                save_config
+                                print_message "SUCCESS" "$(t ul_nas_saved)"
+                            else
+                                save_config
+                                print_message "WARN" "$(t ul_nas_not_added)"
+                            fi
+                        fi
+                    else
+                        save_config
+                        print_message "WARN" "$(t ul_nas_not_added)"
                     fi
                 fi
                 ;;

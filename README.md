@@ -11,14 +11,14 @@
 - notifications directly to Telegram bot or group topic with attached backup
 - script version update notifications
 - backup size check before sending to TG and limit exceeded notification
-- backup upload to Google Drive or S3 Storage (optional)
+- backup upload to Google Drive, S3 Storage or a Synology NAS via the rsync service (optional)
 - configurable backup retention policy for server-side and S3 backups separately
 
 ## Main menu:
 
 ```
 RW & SHM BACKUP & RESTORE
-v3.3.4
+v3.4.0
 [Remnawave ✓] [SHM ✓]
 
    1. Create backup
